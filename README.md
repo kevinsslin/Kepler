@@ -34,6 +34,14 @@ help with the setup:
 > Set up Symphony for my repository based on
 > https://github.com/openai/symphony/blob/main/elixir/README.md
 
+### Option 3. Use the experimental TypeScript implementation
+
+Check out [typescript/README.md](typescript/README.md) for Bun-based setup and run instructions.
+You can also ask your coding agent to bootstrap it:
+
+> Set up Symphony for my repository based on
+> https://github.com/openai/symphony/blob/main/typescript/README.md
+
 ---
 
 ## License
