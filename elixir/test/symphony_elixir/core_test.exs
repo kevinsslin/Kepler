@@ -83,8 +83,20 @@ defmodule SymphonyElixir.CoreTest do
     assert is_map(tracker)
     assert Map.get(tracker, "kind") == "linear"
     assert is_binary(Map.get(tracker, "project_slug"))
-    assert is_list(Map.get(tracker, "active_states"))
-    assert is_list(Map.get(tracker, "terminal_states"))
+
+    case Map.get(tracker, "state_map") do
+      %{} = state_map when map_size(state_map) > 0 ->
+        assert is_list(Map.get(state_map, "queued"))
+        assert is_list(Map.get(state_map, "active"))
+        assert is_list(Map.get(state_map, "terminal"))
+
+      _ ->
+        assert is_list(Map.get(tracker, "active_states"))
+        assert is_list(Map.get(tracker, "terminal_states"))
+    end
+
+    assert is_list(Config.tracker_active_states())
+    assert is_list(Config.tracker_terminal_states())
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
