@@ -59,6 +59,7 @@ Use `tracker_get_issue` with the issue key.
 1. Call `tracker_list_comments`.
 2. Find the existing workpad comment.
 3. Use `tracker_update_comment` when reusing it, or `tracker_create_comment` when creating it.
+4. When updating a Jira-backed comment, include both `commentId` and `issueId`.
 
 ### Move an issue
 

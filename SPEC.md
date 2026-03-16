@@ -6,9 +6,13 @@ Purpose: Define a service that orchestrates coding agents to get project work do
 
 ## 1. Problem Statement
 
-Symphony is a long-running automation service that continuously reads work from an issue tracker
-(Linear in this specification version), creates an isolated workspace for each issue, and runs a
-coding agent session for that issue inside the workspace.
+Symphony is a long-running automation service that continuously reads work from an issue tracker,
+creates an isolated workspace for each issue, and runs a coding agent session for that issue inside
+the workspace.
+
+This specification uses Linear as the baseline tracker example and normalized integration contract.
+Reference implementations may add other trackers, such as Jira Cloud, as long as they preserve the
+same orchestration semantics and normalized issue model.
 
 The service solves four operational problems:
 
@@ -119,7 +123,7 @@ Symphony is easiest to port when kept in these layers:
 4. `Execution Layer` (workspace + agent subprocess)
    - Filesystem lifecycle, workspace preparation, coding-agent protocol.
 
-5. `Integration Layer` (Linear adapter)
+5. `Integration Layer` (tracker adapter)
    - API calls and normalization for tracker data.
 
 6. `Observability Layer` (logs + optional status surface)
@@ -127,7 +131,8 @@ Symphony is easiest to port when kept in these layers:
 
 ### 3.3 External Dependencies
 
-- Issue tracker API (Linear for `tracker.kind: linear` in this specification version).
+- Issue tracker API (Linear-compatible baseline in this specification version; implementations may
+  add Jira Cloud or other trackers).
 - Local filesystem for workspaces and logs.
 - Optional workspace population tooling (for example Git CLI, if used).
 - Coding-agent executable that supports JSON-RPC-like app-server mode over stdio.

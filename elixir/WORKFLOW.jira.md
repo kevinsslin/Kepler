@@ -1,13 +1,22 @@
 ---
 tracker:
+  # Jira Cloud sample workflow. Use one Jira project per workflow file.
   kind: jira
+  # Base Jira Cloud URL. The current reference implementation supports *.atlassian.net only.
   site_url: $JIRA_SITE_URL
-  project_key: ENG
+  # Project key to scope both reads and writes.
+  project_key: $JIRA_PROJECT_KEY
+  # Recommended. If you override this, use a Jira account ID.
   assignee: me
   auth:
+    # Jira Cloud currently supports api_token auth only.
     type: api_token
     email: $JIRA_EMAIL
     api_token: $JIRA_API_TOKEN
+  # Optional: customize this if your Jira instance uses a different blocker link name.
+  # link_types:
+  #   blocks_inward:
+  #     - is blocked by
   state_map:
     queued:
       - Todo
