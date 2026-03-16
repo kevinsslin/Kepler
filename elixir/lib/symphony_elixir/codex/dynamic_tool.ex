@@ -446,20 +446,86 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp validate_jira_search_scope(request_opts) do
-    case Keyword.get(request_opts, :json, %{}) do
-      %{"jql" => jql} when is_binary(jql) ->
-        project_key = String.upcase(Config.jira_project_key() || "")
+    case jira_search_jql(request_opts) do
+      nil ->
+        :ok
 
-        if String.contains?(String.upcase(jql), project_key) do
+      jql ->
+        if exact_jira_project_scope?(jql, Config.jira_project_key() || "") do
           :ok
         else
           {:error, :jira_rest_out_of_scope_search}
         end
-
-      _ ->
-        :ok
     end
   end
+
+  defp jira_search_jql(request_opts) do
+    Keyword.get(request_opts, :json, %{})
+    |> map_value_for_keys(["jql", :jql])
+    |> case do
+      jql when is_binary(jql) ->
+        jql
+
+      _ ->
+        request_opts
+        |> Keyword.get(:query, [])
+        |> keyword_value_for_keys(["jql", :jql])
+    end
+  end
+
+  defp exact_jira_project_scope?(jql, project_key)
+       when is_binary(jql) and is_binary(project_key) do
+    normalized_project_key = String.trim(project_key)
+
+    if normalized_project_key == "" do
+      false
+    else
+      exact_project_clause_regex(normalized_project_key)
+      |> Regex.match?(jql)
+    end
+  end
+
+  defp exact_jira_project_scope?(_jql, _project_key), do: false
+
+  defp exact_project_clause_regex(project_key) do
+    escaped_project_key = Regex.escape(project_key)
+    project_token = ~s/(?:"#{escaped_project_key}"|#{escaped_project_key}\\b)/
+
+    ~r/
+    \bproject\b
+    \s*
+    (?:
+      =
+      \s*
+      #{project_token}
+      |
+      in
+      \s*
+      \(
+        \s*
+        #{project_token}
+        \s*
+      \)
+    )
+    /ix
+  end
+
+  defp map_value_for_keys(map, keys) when is_map(map) do
+    Enum.find_value(keys, fn key -> Map.get(map, key) end)
+  end
+
+  defp map_value_for_keys(_map, _keys), do: nil
+
+  defp keyword_value_for_keys(keyword, keys) when is_list(keyword) do
+    Enum.find_value(keys, fn key ->
+      case List.keyfind(keyword, key, 0) do
+        {^key, value} -> value
+        _ -> nil
+      end
+    end)
+  end
+
+  defp keyword_value_for_keys(_keyword, _keys), do: nil
 
   defp normalize_query(arguments) do
     case Map.get(arguments, "query") || Map.get(arguments, :query) do

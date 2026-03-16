@@ -484,6 +484,18 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
     assert comment_path["success"] == false
 
+    out_of_scope_get_search =
+      DynamicTool.execute(
+        "jira_rest",
+        %{
+          "method" => "GET",
+          "path" => "/rest/api/3/search",
+          "query" => %{"jql" => "project = OPS"}
+        }
+      )
+
+    assert out_of_scope_get_search["success"] == false
+
     out_of_scope_search =
       DynamicTool.execute(
         "jira_rest",
@@ -495,5 +507,46 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       )
 
     assert out_of_scope_search["success"] == false
+
+    substring_project_key_search =
+      DynamicTool.execute(
+        "jira_rest",
+        %{
+          "method" => "POST",
+          "path" => "/rest/api/3/search/jql",
+          "body" => %{"jql" => "project = ENG2"}
+        }
+      )
+
+    assert substring_project_key_search["success"] == false
+  end
+
+  test "jira_rest accepts in-scope GET searches with exact project matching" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "jira",
+      tracker_project_key: "ENG",
+      tracker_site_url: "https://example.atlassian.net"
+    )
+
+    jira_client = fn method, path, request_opts ->
+      send(self(), {:jira_rest_called, method, path, request_opts})
+      {:ok, %{"issues" => []}}
+    end
+
+    response =
+      DynamicTool.execute(
+        "jira_rest",
+        %{
+          "method" => "GET",
+          "path" => "/rest/api/3/search",
+          "query" => %{"jql" => "project in (\"ENG\")"}
+        },
+        jira_client: jira_client
+      )
+
+    assert response["success"] == true
+
+    assert_receive {:jira_rest_called, :get, "/rest/api/3/search", request_opts}
+    assert Keyword.get(request_opts, :query) == [{"jql", "project in (\"ENG\")"}]
   end
 end
