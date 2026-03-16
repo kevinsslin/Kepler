@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, Linear.Issue}
+  alias SymphonyElixir.{Config, Tracker.Issue}
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
@@ -399,14 +399,19 @@ defmodule SymphonyElixir.Linear.Client do
       description: issue["description"],
       priority: parse_priority(issue["priority"]),
       state: get_in(issue, ["state", "name"]),
+      semantic_state: Config.semantic_state_for_tracker_state(get_in(issue, ["state", "name"])),
       branch_name: issue["branchName"],
       url: issue["url"],
       assignee_id: assignee_field(assignee, "id"),
+      assignee_ref: assignee,
       blocked_by: extract_blockers(issue),
       labels: extract_labels(issue),
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
       created_at: parse_datetime(issue["createdAt"]),
-      updated_at: parse_datetime(issue["updatedAt"])
+      updated_at: parse_datetime(issue["updatedAt"]),
+      tracker_meta: %{
+        "kind" => "linear"
+      }
     }
   end
 

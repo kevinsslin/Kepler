@@ -3,23 +3,72 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
   alias SymphonyElixir.Codex.DynamicTool
 
-  test "tool_specs advertises the linear_graphql input contract" do
-    assert [
+  defmodule FakeTracker do
+    def get_issue(issue_id) do
+      {:ok, %SymphonyElixir.Tracker.Issue{id: issue_id, identifier: issue_id, title: "Issue #{issue_id}"}}
+    end
+
+    def list_comments(issue_id) do
+      {:ok, [%SymphonyElixir.Tracker.Comment{id: "comment-1", issue_id: issue_id, body: "hello"}]}
+    end
+
+    def create_comment(issue_id, body) do
+      send(self(), {:tracker_create_comment_called, issue_id, body})
+      :ok
+    end
+
+    def update_comment(comment_id, body, issue_id) do
+      send(self(), {:tracker_update_comment_called, comment_id, body, issue_id})
+      :ok
+    end
+
+    def update_issue_state(issue_id, state_name) do
+      send(self(), {:tracker_update_issue_state_called, issue_id, state_name})
+      :ok
+    end
+
+    def attach_pr(issue_id, url, title) do
+      send(self(), {:tracker_attach_pr_called, issue_id, url, title})
+      :ok
+    end
+
+    def attach_url(issue_id, url, title) do
+      send(self(), {:tracker_attach_url_called, issue_id, url, title})
+      :ok
+    end
+
+    def upload_attachment(issue_id, filename, content_type, body) do
+      send(
+        self(),
+        {:tracker_upload_attachment_called, issue_id, filename, content_type, IO.iodata_to_binary(body)}
+      )
+
+      {:ok, %{filename: filename, url: "https://example.org/#{filename}"}}
+    end
+  end
+
+  test "tool_specs advertises tracker and tracker-specific tool contracts" do
+    tool_specs = DynamicTool.tool_specs()
+
+    assert Enum.any?(tool_specs, fn
              %{
                "description" => description,
                "inputSchema" => %{
-                 "properties" => %{
-                   "query" => _,
-                   "variables" => _
-                 },
+                 "properties" => %{"query" => _, "variables" => _},
                  "required" => ["query"],
                  "type" => "object"
                },
                "name" => "linear_graphql"
-             }
-           ] = DynamicTool.tool_specs()
+             } ->
+               description =~ "Linear"
 
-    assert description =~ "Linear"
+             _ ->
+               false
+           end)
+
+    assert Enum.any?(tool_specs, &(&1["name"] == "jira_rest"))
+    assert Enum.any?(tool_specs, &(&1["name"] == "tracker_get_issue"))
+    assert Enum.any?(tool_specs, &(&1["name"] == "tracker_transition_issue"))
   end
 
   test "unsupported tools return a failure payload with the supported tool list" do
@@ -34,12 +83,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              }
            ] = response["contentItems"]
 
-    assert Jason.decode!(text) == %{
+    assert %{
              "error" => %{
                "message" => ~s(Unsupported dynamic tool: "not_a_real_tool".),
-               "supportedTools" => ["linear_graphql"]
+               "supportedTools" => supported_tools
              }
-           }
+           } = Jason.decode!(text)
+
+    assert "linear_graphql" in supported_tools
+    assert "jira_rest" in supported_tools
+    assert "tracker_create_comment" in supported_tools
   end
 
   test "linear_graphql returns successful GraphQL responses as tool text" do
@@ -374,5 +427,126 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                "text" => ":ok"
              }
            ] = response["contentItems"]
+  end
+
+  test "tracker_transition_issue resolves semanticState through tracker.state_map" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_state_map: %{
+        review: ["Human Review"],
+        terminal: ["Done"]
+      }
+    )
+
+    response =
+      DynamicTool.execute(
+        "tracker_transition_issue",
+        %{"issueId" => "ENG-7", "semanticState" => "review"},
+        tracker_module: FakeTracker
+      )
+
+    assert response["success"] == true
+    assert_received {:tracker_update_issue_state_called, "ENG-7", "Human Review"}
+  end
+
+  test "jira_rest rejects absolute urls, comment paths, and out-of-scope searches" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "jira",
+      tracker_project_key: "ENG",
+      tracker_site_url: "https://example.atlassian.net"
+    )
+
+    absolute_url =
+      DynamicTool.execute("jira_rest", %{"method" => "GET", "path" => "https://evil.example/rest/api/3/myself"})
+
+    assert absolute_url["success"] == false
+
+    assert [
+             %{
+               "text" => absolute_text
+             }
+           ] = absolute_url["contentItems"]
+
+    assert Jason.decode!(absolute_text) == %{
+             "error" => %{
+               "message" => "`jira_rest.path` must be a relative Jira API path, not an absolute URL."
+             }
+           }
+
+    comment_path =
+      DynamicTool.execute(
+        "jira_rest",
+        %{
+          "method" => "PUT",
+          "path" => "/rest/api/3/comment/comment-1",
+          "body" => %{"body" => %{"type" => "doc", "version" => 1, "content" => []}}
+        }
+      )
+
+    assert comment_path["success"] == false
+
+    out_of_scope_get_search =
+      DynamicTool.execute(
+        "jira_rest",
+        %{
+          "method" => "GET",
+          "path" => "/rest/api/3/search",
+          "query" => %{"jql" => "project = OPS"}
+        }
+      )
+
+    assert out_of_scope_get_search["success"] == false
+
+    out_of_scope_search =
+      DynamicTool.execute(
+        "jira_rest",
+        %{
+          "method" => "POST",
+          "path" => "/rest/api/3/search/jql",
+          "body" => %{"jql" => "project = OPS"}
+        }
+      )
+
+    assert out_of_scope_search["success"] == false
+
+    substring_project_key_search =
+      DynamicTool.execute(
+        "jira_rest",
+        %{
+          "method" => "POST",
+          "path" => "/rest/api/3/search/jql",
+          "body" => %{"jql" => "project = ENG2"}
+        }
+      )
+
+    assert substring_project_key_search["success"] == false
+  end
+
+  test "jira_rest accepts in-scope GET searches with exact project matching" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "jira",
+      tracker_project_key: "ENG",
+      tracker_site_url: "https://example.atlassian.net"
+    )
+
+    jira_client = fn method, path, request_opts ->
+      send(self(), {:jira_rest_called, method, path, request_opts})
+      {:ok, %{"issues" => []}}
+    end
+
+    response =
+      DynamicTool.execute(
+        "jira_rest",
+        %{
+          "method" => "GET",
+          "path" => "/rest/api/3/search",
+          "query" => %{"jql" => "project in (\"ENG\")"}
+        },
+        jira_client: jira_client
+      )
+
+    assert response["success"] == true
+
+    assert_receive {:jira_rest_called, :get, "/rest/api/3/search", request_opts}
+    assert Keyword.get(request_opts, :query) == [{"jql", "project in (\"ENG\")"}]
   end
 end

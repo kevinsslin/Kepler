@@ -1,6 +1,7 @@
 # Symphony Elixir
 
-This directory contains the Elixir agent orchestration service that polls Linear, creates per-issue workspaces, and runs Codex in app-server mode.
+This directory contains the Elixir agent orchestration service that polls a configured tracker,
+creates per-issue workspaces, and runs Codex in app-server mode.
 
 ## Environment
 
@@ -61,4 +62,4 @@ If behavior/config changes, update docs in the same PR:
 
 - `../README.md` for project concept and goals.
 - `README.md` for Elixir implementation and run instructions.
-- `WORKFLOW.md` for workflow/config contract changes.
+- `WORKFLOW.md` and `WORKFLOW.jira.md` for workflow/config contract changes.

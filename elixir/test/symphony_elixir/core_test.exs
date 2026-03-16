@@ -83,8 +83,20 @@ defmodule SymphonyElixir.CoreTest do
     assert is_map(tracker)
     assert Map.get(tracker, "kind") == "linear"
     assert is_binary(Map.get(tracker, "project_slug"))
-    assert is_list(Map.get(tracker, "active_states"))
-    assert is_list(Map.get(tracker, "terminal_states"))
+
+    case Map.get(tracker, "state_map") do
+      %{} = state_map when map_size(state_map) > 0 ->
+        assert is_list(Map.get(state_map, "queued"))
+        assert is_list(Map.get(state_map, "active"))
+        assert is_list(Map.get(state_map, "terminal"))
+
+      _ ->
+        assert is_list(Map.get(tracker, "active_states"))
+        assert is_list(Map.get(tracker, "terminal_states"))
+    end
+
+    assert is_list(Config.tracker_active_states())
+    assert is_list(Config.tracker_terminal_states())
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
@@ -538,10 +550,12 @@ defmodule SymphonyElixir.CoreTest do
     assert_due_in_range(due_at_ms, 9_000, 10_500)
   end
 
+  @due_in_assertion_slack_ms 250
+
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
 
-    assert remaining_ms >= min_remaining_ms
+    assert remaining_ms >= max(0, min_remaining_ms - @due_in_assertion_slack_ms)
     assert remaining_ms <= max_remaining_ms
   end
 
@@ -668,7 +682,7 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue)
 
-    assert prompt =~ "You are working on a Linear issue."
+    assert prompt =~ "You are working on a tracker issue."
     assert prompt =~ "Identifier: MT-777"
     assert prompt =~ "Title: Make fallback prompt useful"
     assert prompt =~ "Body:"

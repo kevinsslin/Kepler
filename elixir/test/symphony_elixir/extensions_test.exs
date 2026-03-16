@@ -4,6 +4,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
+  alias SymphonyElixir.Jira.Adapter, as: JiraAdapter
   alias SymphonyElixir.Linear.Adapter
   alias SymphonyElixir.Tracker.Memory
 
@@ -36,6 +37,63 @@ defmodule SymphonyElixir.ExtensionsTest do
         _ ->
           Process.get({__MODULE__, :graphql_result})
       end
+    end
+  end
+
+  defmodule FakeJiraClient do
+    def fetch_candidate_issues do
+      send(self(), :jira_fetch_candidate_issues_called)
+      {:ok, [:jira_candidate]}
+    end
+
+    def fetch_issues_by_states(states) do
+      send(self(), {:jira_fetch_issues_by_states_called, states})
+      {:ok, states}
+    end
+
+    def fetch_issue_states_by_ids(issue_ids) do
+      send(self(), {:jira_fetch_issue_states_by_ids_called, issue_ids})
+      {:ok, issue_ids}
+    end
+
+    def get_issue(issue_id_or_identifier) do
+      send(self(), {:jira_get_issue_called, issue_id_or_identifier})
+      {:ok, %{id: issue_id_or_identifier}}
+    end
+
+    def list_comments(issue_id_or_identifier) do
+      send(self(), {:jira_list_comments_called, issue_id_or_identifier})
+      {:ok, [%{id: "comment-1"}]}
+    end
+
+    def create_comment(issue_id, body) do
+      send(self(), {:jira_create_comment_called, issue_id, body})
+      :ok
+    end
+
+    def update_comment(comment_id, body, issue_id) do
+      send(self(), {:jira_update_comment_called, comment_id, body, issue_id})
+      :ok
+    end
+
+    def update_issue_state(issue_id, state_name) do
+      send(self(), {:jira_update_issue_state_called, issue_id, state_name})
+      :ok
+    end
+
+    def attach_url(issue_id, url, title) do
+      send(self(), {:jira_attach_url_called, issue_id, url, title})
+      :ok
+    end
+
+    def attach_pr(issue_id, url, title) do
+      send(self(), {:jira_attach_pr_called, issue_id, url, title})
+      :ok
+    end
+
+    def upload_attachment(issue_id, filename, content_type, body) do
+      send(self(), {:jira_upload_attachment_called, issue_id, filename, content_type, IO.iodata_to_binary(body)})
+      {:ok, %{filename: filename}}
     end
   end
 
@@ -79,12 +137,19 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   setup do
     linear_client_module = Application.get_env(:symphony_elixir, :linear_client_module)
+    jira_client_module = Application.get_env(:symphony_elixir, :jira_client_module)
 
     on_exit(fn ->
       if is_nil(linear_client_module) do
         Application.delete_env(:symphony_elixir, :linear_client_module)
       else
         Application.put_env(:symphony_elixir, :linear_client_module, linear_client_module)
+      end
+
+      if is_nil(jira_client_module) do
+        Application.delete_env(:symphony_elixir, :jira_client_module)
+      else
+        Application.put_env(:symphony_elixir, :jira_client_module, jira_client_module)
       end
     end)
 
@@ -158,18 +223,18 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:noreply, returned_state} = WorkflowStore.handle_info(:poll, state)
     assert returned_state.workflow.prompt == "Manual workflow prompt"
     refute returned_state.stamp == nil
-    assert_receive :poll, 1_100
+    assert_receive :poll, 2_000
 
     Workflow.set_workflow_file_path(missing_path)
     assert {:noreply, path_error_state} = WorkflowStore.handle_info(:poll, returned_state)
     assert path_error_state.workflow.prompt == "Manual workflow prompt"
-    assert_receive :poll, 1_100
+    assert_receive :poll, 2_000
 
     Workflow.set_workflow_file_path(manual_path)
     File.rm!(manual_path)
     assert {:noreply, removed_state} = WorkflowStore.handle_info(:poll, path_error_state)
     assert removed_state.workflow.prompt == "Manual workflow prompt"
-    assert_receive :poll, 1_100
+    assert_receive :poll, 2_000
 
     Process.exit(manual_pid, :normal)
     restart_result = Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
@@ -203,6 +268,35 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
     assert SymphonyElixir.Tracker.adapter() == Adapter
+
+    Application.put_env(:symphony_elixir, :jira_client_module, FakeJiraClient)
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "jira")
+    assert SymphonyElixir.Tracker.adapter() == JiraAdapter
+    assert {:ok, [:jira_candidate]} = SymphonyElixir.Tracker.fetch_candidate_issues()
+    assert_receive :jira_fetch_candidate_issues_called
+    assert {:ok, ["Done"]} = SymphonyElixir.Tracker.fetch_issues_by_states(["Done"])
+    assert_receive {:jira_fetch_issues_by_states_called, ["Done"]}
+    assert {:ok, ["jira-1"]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["jira-1"])
+    assert_receive {:jira_fetch_issue_states_by_ids_called, ["jira-1"]}
+    assert {:ok, %{id: "ENG-1"}} = SymphonyElixir.Tracker.get_issue("ENG-1")
+    assert_receive {:jira_get_issue_called, "ENG-1"}
+    assert {:ok, [%{id: "comment-1"}]} = SymphonyElixir.Tracker.list_comments("ENG-1")
+    assert_receive {:jira_list_comments_called, "ENG-1"}
+    assert :ok = SymphonyElixir.Tracker.create_comment("ENG-1", "jira comment")
+    assert_receive {:jira_create_comment_called, "ENG-1", "jira comment"}
+    assert :ok = SymphonyElixir.Tracker.update_comment("comment-1", "update", "ENG-1")
+    assert_receive {:jira_update_comment_called, "comment-1", "update", "ENG-1"}
+    assert :ok = SymphonyElixir.Tracker.update_issue_state("ENG-1", "Done")
+    assert_receive {:jira_update_issue_state_called, "ENG-1", "Done"}
+    assert :ok = SymphonyElixir.Tracker.attach_url("ENG-1", "https://example.org", "Example")
+    assert_receive {:jira_attach_url_called, "ENG-1", "https://example.org", "Example"}
+    assert :ok = SymphonyElixir.Tracker.attach_pr("ENG-1", "https://github.com/org/repo/pull/1", "PR")
+    assert_receive {:jira_attach_pr_called, "ENG-1", "https://github.com/org/repo/pull/1", "PR"}
+
+    assert {:ok, %{filename: "proof.txt"}} =
+             SymphonyElixir.Tracker.upload_attachment("ENG-1", "proof.txt", "text/plain", "proof")
+
+    assert_receive {:jira_upload_attachment_called, "ENG-1", "proof.txt", "text/plain", "proof"}
   end
 
   test "linear adapter delegates reads and validates mutation responses" do

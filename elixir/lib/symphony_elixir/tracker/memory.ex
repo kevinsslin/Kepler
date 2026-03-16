@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @behaviour SymphonyElixir.Tracker
 
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Tracker.{Comment, Issue}
 
   @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -35,9 +35,30 @@ defmodule SymphonyElixir.Tracker.Memory do
      end)}
   end
 
+  @spec get_issue(String.t()) :: {:ok, Issue.t()} | {:error, term()}
+  def get_issue(issue_id_or_identifier) do
+    case Enum.find(issue_entries(), fn %Issue{} = issue ->
+           issue.id == issue_id_or_identifier or issue.identifier == issue_id_or_identifier
+         end) do
+      %Issue{} = issue -> {:ok, issue}
+      _ -> {:error, :issue_not_found}
+    end
+  end
+
+  @spec list_comments(String.t()) :: {:ok, [Comment.t()]} | {:error, term()}
+  def list_comments(_issue_id_or_identifier) do
+    {:ok, []}
+  end
+
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) do
     send_event({:memory_tracker_comment, issue_id, body})
+    :ok
+  end
+
+  @spec update_comment(String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
+  def update_comment(comment_id, body, issue_id) do
+    send_event({:memory_tracker_comment_update, comment_id, body, issue_id})
     :ok
   end
 
@@ -45,6 +66,24 @@ defmodule SymphonyElixir.Tracker.Memory do
   def update_issue_state(issue_id, state_name) do
     send_event({:memory_tracker_state_update, issue_id, state_name})
     :ok
+  end
+
+  @spec attach_url(String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
+  def attach_url(issue_id, url, title) do
+    send_event({:memory_tracker_attach_url, issue_id, url, title})
+    :ok
+  end
+
+  @spec attach_pr(String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
+  def attach_pr(issue_id, url, title) do
+    send_event({:memory_tracker_attach_pr, issue_id, url, title})
+    :ok
+  end
+
+  @spec upload_attachment(String.t(), String.t(), String.t(), iodata()) :: {:ok, map()} | {:error, term()}
+  def upload_attachment(issue_id, filename, content_type, body) do
+    send_event({:memory_tracker_upload_attachment, issue_id, filename, content_type, IO.iodata_to_binary(body)})
+    {:ok, %{filename: filename, issue_id: issue_id}}
   end
 
   defp configured_issues do

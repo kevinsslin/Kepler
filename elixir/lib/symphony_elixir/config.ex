@@ -4,13 +4,15 @@ defmodule SymphonyElixir.Config do
   """
 
   alias NimbleOptions
-  alias SymphonyElixir.Workflow
+  alias SymphonyElixir.{Tracker.SemanticState, Workflow}
 
   @default_active_states ["Todo", "In Progress"]
   @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
   @default_linear_endpoint "https://api.linear.app/graphql"
+  @default_jira_auth_type "api_token"
+  @default_jira_blocks_inward ["is blocked by"]
   @default_prompt_template """
-  You are working on a Linear issue.
+  You are working on a tracker issue.
 
   Identifier: {{ issue.identifier }}
   Title: {{ issue.title }}
@@ -53,6 +55,8 @@ defmodule SymphonyElixir.Config do
                                  endpoint: [type: :string, default: @default_linear_endpoint],
                                  api_key: [type: {:or, [:string, nil]}, default: nil],
                                  project_slug: [type: {:or, [:string, nil]}, default: nil],
+                                 site_url: [type: {:or, [:string, nil]}, default: nil],
+                                 project_key: [type: {:or, [:string, nil]}, default: nil],
                                  assignee: [type: {:or, [:string, nil]}, default: nil],
                                  active_states: [
                                    type: {:list, :string},
@@ -61,6 +65,32 @@ defmodule SymphonyElixir.Config do
                                  terminal_states: [
                                    type: {:list, :string},
                                    default: @default_terminal_states
+                                 ],
+                                 state_map: [
+                                   type: {:map, :string, {:list, :string}},
+                                   default: %{}
+                                 ],
+                                 auth: [
+                                   type: :map,
+                                   default: %{},
+                                   keys: [
+                                     type: [
+                                       type: {:or, [:string, nil]},
+                                       default: @default_jira_auth_type
+                                     ],
+                                     email: [type: {:or, [:string, nil]}, default: nil],
+                                     api_token: [type: {:or, [:string, nil]}, default: nil]
+                                   ]
+                                 ],
+                                 link_types: [
+                                   type: :map,
+                                   default: %{},
+                                   keys: [
+                                     blocks_inward: [
+                                       type: {:list, :string},
+                                       default: @default_jira_blocks_inward
+                                     ]
+                                   ]
                                  ]
                                ]
                              ],
@@ -183,6 +213,75 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:tracker, :kind])
   end
 
+  @spec tracker_assignee() :: String.t() | nil
+  def tracker_assignee do
+    validated_workflow_options()
+    |> get_in([:tracker, :assignee])
+    |> resolve_env_value(System.get_env(tracker_assignee_env_name()))
+    |> normalize_secret_value()
+  end
+
+  @spec tracker_active_states() :: [String.t()]
+  def tracker_active_states do
+    case tracker_state_map() do
+      %{} = state_map when map_size(state_map) > 0 ->
+        SemanticState.dispatchable()
+        |> Enum.flat_map(&Map.get(state_map, &1, []))
+        |> Enum.uniq()
+
+      _ ->
+        get_in(validated_workflow_options(), [:tracker, :active_states])
+    end
+  end
+
+  @spec tracker_terminal_states() :: [String.t()]
+  def tracker_terminal_states do
+    case tracker_state_map() do
+      %{} = state_map when map_size(state_map) > 0 ->
+        Map.get(state_map, "terminal", get_in(validated_workflow_options(), [:tracker, :terminal_states]))
+
+      _ ->
+        get_in(validated_workflow_options(), [:tracker, :terminal_states])
+    end
+  end
+
+  @spec tracker_state_map() :: %{optional(String.t()) => [String.t()]}
+  def tracker_state_map do
+    validated_workflow_options()
+    |> get_in([:tracker, :state_map])
+    |> normalize_state_map()
+    |> fallback_state_map()
+  end
+
+  @spec semantic_state_for_tracker_state(term()) :: String.t() | nil
+  def semantic_state_for_tracker_state(state_name) do
+    normalized_state_name = normalize_issue_state(state_name)
+
+    Enum.find_value(tracker_state_map(), fn {semantic_state, state_names} ->
+      if Enum.any?(state_names, &(normalize_issue_state(&1) == normalized_state_name)) do
+        semantic_state
+      end
+    end)
+  end
+
+  @spec target_tracker_state_for_semantic_state(term()) :: String.t() | nil
+  def target_tracker_state_for_semantic_state(semantic_state) do
+    semantic_state
+    |> SemanticState.normalize()
+    |> then(fn
+      nil -> nil
+      normalized -> tracker_state_map() |> Map.get(normalized, []) |> List.first()
+    end)
+  end
+
+  @spec tracker_project_reference() :: String.t() | nil
+  def tracker_project_reference do
+    case tracker_kind() do
+      "jira" -> jira_project_key()
+      _ -> linear_project_slug()
+    end
+  end
+
   @spec linear_endpoint() :: String.t()
   def linear_endpoint do
     get_in(validated_workflow_options(), [:tracker, :endpoint])
@@ -203,20 +302,64 @@ defmodule SymphonyElixir.Config do
 
   @spec linear_assignee() :: String.t() | nil
   def linear_assignee do
-    validated_workflow_options()
-    |> get_in([:tracker, :assignee])
-    |> resolve_env_value(System.get_env("LINEAR_ASSIGNEE"))
-    |> normalize_secret_value()
+    tracker_assignee()
   end
 
   @spec linear_active_states() :: [String.t()]
   def linear_active_states do
-    get_in(validated_workflow_options(), [:tracker, :active_states])
+    tracker_active_states()
   end
 
   @spec linear_terminal_states() :: [String.t()]
   def linear_terminal_states do
-    get_in(validated_workflow_options(), [:tracker, :terminal_states])
+    tracker_terminal_states()
+  end
+
+  @spec jira_site_url() :: String.t() | nil
+  def jira_site_url do
+    validated_workflow_options()
+    |> get_in([:tracker, :site_url])
+    |> resolve_env_value(System.get_env("JIRA_SITE_URL"))
+    |> normalize_secret_value()
+  end
+
+  @spec jira_project_key() :: String.t() | nil
+  def jira_project_key do
+    validated_workflow_options()
+    |> get_in([:tracker, :project_key])
+    |> resolve_env_value(System.get_env("JIRA_PROJECT_KEY"))
+    |> normalize_secret_value()
+  end
+
+  @spec jira_auth_type() :: String.t()
+  def jira_auth_type do
+    validated_workflow_options()
+    |> get_in([:tracker, :auth, :type])
+    |> scalar_string_or_default(@default_jira_auth_type)
+    |> String.downcase()
+  end
+
+  @spec jira_auth_email() :: String.t() | nil
+  def jira_auth_email do
+    validated_workflow_options()
+    |> get_in([:tracker, :auth, :email])
+    |> resolve_env_value(System.get_env("JIRA_EMAIL"))
+    |> normalize_secret_value()
+  end
+
+  @spec jira_api_token() :: String.t() | nil
+  def jira_api_token do
+    validated_workflow_options()
+    |> get_in([:tracker, :auth, :api_token])
+    |> resolve_env_value(System.get_env("JIRA_API_TOKEN"))
+    |> normalize_secret_value()
+  end
+
+  @spec jira_blocks_inward_link_names() :: [String.t()]
+  def jira_blocks_inward_link_names do
+    validated_workflow_options()
+    |> get_in([:tracker, :link_types, :blocks_inward])
+    |> normalize_string_list(@default_jira_blocks_inward)
   end
 
   @spec poll_interval_ms() :: pos_integer()
@@ -367,6 +510,9 @@ defmodule SymphonyElixir.Config do
          :ok <- require_tracker_kind(),
          :ok <- require_linear_token(),
          :ok <- require_linear_project(),
+         :ok <- require_jira_site_url(),
+         :ok <- require_jira_project_key(),
+         :ok <- require_jira_auth(),
          :ok <- require_valid_codex_runtime_settings() do
       require_codex_command()
     end
@@ -389,6 +535,7 @@ defmodule SymphonyElixir.Config do
   defp require_tracker_kind do
     case tracker_kind() do
       "linear" -> :ok
+      "jira" -> :ok
       "memory" -> :ok
       nil -> {:error, :missing_tracker_kind}
       other -> {:error, {:unsupported_tracker_kind, other}}
@@ -420,6 +567,55 @@ defmodule SymphonyElixir.Config do
 
       _ ->
         :ok
+    end
+  end
+
+  defp require_jira_site_url do
+    case tracker_kind() do
+      "jira" ->
+        if is_binary(jira_site_url()) do
+          :ok
+        else
+          {:error, :missing_jira_site_url}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp require_jira_project_key do
+    case tracker_kind() do
+      "jira" ->
+        if is_binary(jira_project_key()) do
+          :ok
+        else
+          {:error, :missing_jira_project_key}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp require_jira_auth do
+    case tracker_kind() do
+      "jira" ->
+        require_jira_auth_type(jira_auth_type())
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp require_jira_auth_type("api_token"), do: require_jira_api_token_auth()
+  defp require_jira_auth_type(other), do: {:error, {:unsupported_jira_auth_type, other}}
+
+  defp require_jira_api_token_auth do
+    cond do
+      not is_binary(jira_auth_email()) -> {:error, :missing_jira_auth_email}
+      not is_binary(jira_api_token()) -> {:error, :missing_jira_api_token}
+      true -> :ok
     end
   end
 
@@ -463,8 +659,14 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:endpoint, scalar_string_value(Map.get(section, "endpoint")))
     |> put_if_present(:api_key, binary_value(Map.get(section, "api_key"), allow_empty: true))
     |> put_if_present(:project_slug, scalar_string_value(Map.get(section, "project_slug")))
+    |> put_if_present(:site_url, scalar_string_value(Map.get(section, "site_url")))
+    |> put_if_present(:project_key, scalar_string_value(Map.get(section, "project_key")))
+    |> put_if_present(:assignee, binary_value(Map.get(section, "assignee"), allow_empty: true))
     |> put_if_present(:active_states, csv_value(Map.get(section, "active_states")))
     |> put_if_present(:terminal_states, csv_value(Map.get(section, "terminal_states")))
+    |> put_if_present(:state_map, state_map_value(Map.get(section, "state_map")))
+    |> put_if_present(:auth, tracker_auth_value(Map.get(section, "auth")))
+    |> put_if_present(:link_types, tracker_link_types_value(Map.get(section, "link_types")))
   end
 
   defp extract_polling_options(section) do
@@ -659,6 +861,44 @@ defmodule SymphonyElixir.Config do
 
   defp state_limits_value(_value), do: :omit
 
+  defp state_map_value(value) when is_map(value) do
+    value
+    |> Enum.reduce(%{}, fn {semantic_state, states}, acc ->
+      case normalized_state_map_entry(semantic_state, states) do
+        nil -> acc
+        {normalized_semantic_state, normalized_states} -> Map.put(acc, normalized_semantic_state, normalized_states)
+      end
+    end)
+  end
+
+  defp state_map_value(_value), do: :omit
+
+  defp normalized_state_map_entry(semantic_state, states) do
+    with normalized_semantic_state when not is_nil(normalized_semantic_state) <-
+           SemanticState.normalize(semantic_state),
+         normalized_states when normalized_states != :omit <- csv_value(states) do
+      {normalized_semantic_state, normalized_states}
+    else
+      _ -> nil
+    end
+  end
+
+  defp tracker_auth_value(value) when is_map(value) do
+    %{}
+    |> put_if_present(:type, scalar_string_value(Map.get(value, "type")))
+    |> put_if_present(:email, binary_value(Map.get(value, "email"), allow_empty: true))
+    |> put_if_present(:api_token, binary_value(Map.get(value, "api_token"), allow_empty: true))
+  end
+
+  defp tracker_auth_value(_value), do: :omit
+
+  defp tracker_link_types_value(value) when is_map(value) do
+    %{}
+    |> put_if_present(:blocks_inward, csv_value(Map.get(value, "blocks_inward")))
+  end
+
+  defp tracker_link_types_value(_value), do: :omit
+
   defp parse_integer(value) when is_integer(value), do: {:ok, value}
 
   defp parse_integer(value) when is_binary(value) do
@@ -791,6 +1031,61 @@ defmodule SymphonyElixir.Config do
   end
 
   defp normalize_tracker_kind(_kind), do: nil
+
+  defp normalize_state_map(%{} = state_map) do
+    state_map
+    |> Enum.reduce(%{}, fn {semantic_state, state_names}, acc ->
+      case SemanticState.normalize(semantic_state) do
+        nil -> acc
+        normalized -> Map.put(acc, normalized, normalize_string_list(state_names, []))
+      end
+    end)
+    |> Enum.reject(fn {_semantic_state, state_names} -> state_names == [] end)
+    |> Map.new()
+  end
+
+  defp normalize_state_map(_state_map), do: %{}
+
+  defp fallback_state_map(state_map) when map_size(state_map) > 0, do: state_map
+
+  defp fallback_state_map(_state_map) do
+    %{
+      "active" => get_in(validated_workflow_options(), [:tracker, :active_states]),
+      "terminal" => get_in(validated_workflow_options(), [:tracker, :terminal_states])
+    }
+  end
+
+  defp normalize_string_list(values, default)
+
+  defp normalize_string_list(values, default) when is_list(values) do
+    values
+    |> Enum.map(&scalar_string_value/1)
+    |> Enum.reject(&(&1 in [:omit, ""]))
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> case do
+      [] -> default
+      normalized_values -> normalized_values
+    end
+  end
+
+  defp normalize_string_list(_values, default), do: default
+
+  defp scalar_string_or_default(value, default) when is_binary(value) do
+    case String.trim(value) do
+      "" -> default
+      trimmed -> trimmed
+    end
+  end
+
+  defp scalar_string_or_default(_value, default), do: default
+
+  defp tracker_assignee_env_name do
+    case tracker_kind() do
+      "jira" -> "JIRA_ASSIGNEE"
+      _ -> "LINEAR_ASSIGNEE"
+    end
+  end
 
   defp workflow_config do
     case current_workflow() do

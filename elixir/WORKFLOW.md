@@ -1,18 +1,31 @@
 ---
 tracker:
+  # Linear sample workflow. For Jira Cloud, start from WORKFLOW.jira.md.
   kind: linear
+  # Linear project slugId from the project URL.
   project_slug: "symphony-0c79b11b75ea"
-  active_states:
-    - Todo
-    - In Progress
-    - Merging
-    - Rework
-  terminal_states:
-    - Closed
-    - Cancelled
-    - Canceled
-    - Duplicate
-    - Done
+  # Keep secrets out of the file when possible.
+  api_key: $LINEAR_API_KEY
+  # Optional: use "me" or a tracker-specific assignee value to shard work.
+  assignee: $LINEAR_ASSIGNEE
+  # Prefer semantic state_map for new workflows.
+  state_map:
+    queued:
+      - Todo
+    active:
+      - In Progress
+    review:
+      - Human Review
+    merge:
+      - Merging
+    rework:
+      - Rework
+    terminal:
+      - Closed
+      - Cancelled
+      - Canceled
+      - Duplicate
+      - Done
 polling:
   interval_ms: 5000
 workspace:
