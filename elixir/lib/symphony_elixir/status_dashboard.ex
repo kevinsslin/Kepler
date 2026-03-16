@@ -391,12 +391,11 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_project_link_lines do
     project_part =
-      case Config.linear_project_slug() do
-        project_slug when is_binary(project_slug) and project_slug != "" ->
-          colorize(linear_project_url(project_slug), @ansi_cyan)
-
-        _ ->
-          colorize("n/a", @ansi_gray)
+      Config.tracker_project_reference()
+      |> project_url()
+      |> case do
+        nil -> colorize("n/a", @ansi_gray)
+        url -> colorize(url, @ansi_cyan)
       end
 
     project_line = colorize("│ Project: ", @ansi_bold) <> project_part
@@ -423,6 +422,18 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_project_refresh_line(_) do
     colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
   end
+
+  defp project_url(project_reference) when is_binary(project_reference) and project_reference != "" do
+    case Config.tracker_kind() do
+      "jira" ->
+        String.trim_trailing(Config.jira_site_url() || "", "/") <> "/jira/software/projects/#{project_reference}"
+
+      _ ->
+        linear_project_url(project_reference)
+    end
+  end
+
+  defp project_url(_project_reference), do: nil
 
   defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
 
@@ -632,7 +643,7 @@ defmodule SymphonyElixir.StatusDashboard do
   @doc false
   @spec format_running_summary_for_test(map(), integer() | nil) :: String.t()
   def format_running_summary_for_test(running_entry, terminal_columns \\ nil),
-    do: format_running_summary(running_entry, running_event_width(terminal_columns))
+    do: format_running_summary(running_entry, running_event_width_for_test(terminal_columns))
 
   @doc false
   @spec format_tps_for_test(number()) :: String.t()
@@ -770,6 +781,12 @@ defmodule SymphonyElixir.StatusDashboard do
       terminal_columns - fixed_running_width() - @running_row_chrome_width
     )
   end
+
+  defp running_event_width_for_test(nil) do
+    running_event_width(fixed_running_width() + @running_row_chrome_width + @running_event_default_width)
+  end
+
+  defp running_event_width_for_test(terminal_columns), do: running_event_width(terminal_columns)
 
   defp fixed_running_width do
     @running_id_width +
