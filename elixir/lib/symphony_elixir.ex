@@ -19,18 +19,17 @@ defmodule SymphonyElixir.Application do
 
   use Application
 
+  alias SymphonyElixir.RuntimeMode
+
   @impl true
   def start(_type, _args) do
     :ok = SymphonyElixir.LogFile.configure()
 
-    children = [
-      {Phoenix.PubSub, name: SymphonyElixir.PubSub},
-      {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
-      SymphonyElixir.WorkflowStore,
-      SymphonyElixir.Orchestrator,
-      SymphonyElixir.HttpServer,
-      SymphonyElixir.StatusDashboard
-    ]
+    children =
+      [
+        {Phoenix.PubSub, name: SymphonyElixir.PubSub},
+        {Task.Supervisor, name: SymphonyElixir.TaskSupervisor}
+      ] ++ runtime_children(RuntimeMode.current())
 
     Supervisor.start_link(
       children,
@@ -41,7 +40,29 @@ defmodule SymphonyElixir.Application do
 
   @impl true
   def stop(_state) do
-    SymphonyElixir.StatusDashboard.render_offline_status()
+    if RuntimeMode.workflow?() do
+      SymphonyElixir.StatusDashboard.render_offline_status()
+    end
+
     :ok
+  end
+
+  @type runtime_child :: Supervisor.child_spec() | {module(), term()} | module()
+
+  @spec runtime_children(SymphonyElixir.RuntimeMode.t()) :: [runtime_child()]
+  defp runtime_children(:kepler) do
+    [
+      SymphonyElixir.Kepler.Supervisor,
+      SymphonyElixir.HttpServer
+    ]
+  end
+
+  defp runtime_children(:workflow) do
+    [
+      SymphonyElixir.WorkflowStore,
+      SymphonyElixir.Orchestrator,
+      SymphonyElixir.HttpServer,
+      SymphonyElixir.StatusDashboard
+    ]
   end
 end

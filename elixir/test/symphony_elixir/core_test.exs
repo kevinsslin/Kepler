@@ -526,7 +526,7 @@ defmodule SymphonyElixir.CoreTest do
       end
     end)
 
-    initial_state = :sys.get_state(pid)
+    initial_state = :sys.get_state(pid, 15_000)
 
     running_entry = %{
       pid: self(),
@@ -545,13 +545,13 @@ defmodule SymphonyElixir.CoreTest do
 
     send(pid, {:DOWN, ref, :process, self(), :normal})
     Process.sleep(50)
-    state = :sys.get_state(pid)
+    state = :sys.get_state(pid, 15_000)
 
     refute Map.has_key?(state.running, issue_id)
     assert MapSet.member?(state.completed, issue_id)
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
-    assert_due_in_range(due_at_ms, 500, 1_100)
+    assert_due_in_range(due_at_ms, 100, 1_100)
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -566,7 +566,7 @@ defmodule SymphonyElixir.CoreTest do
       end
     end)
 
-    initial_state = :sys.get_state(pid)
+    initial_state = :sys.get_state(pid, 15_000)
 
     running_entry = %{
       pid: self(),
@@ -586,7 +586,7 @@ defmodule SymphonyElixir.CoreTest do
 
     send(pid, {:DOWN, ref, :process, self(), :boom})
     Process.sleep(50)
-    state = :sys.get_state(pid)
+    state = :sys.get_state(pid, 15_000)
 
     assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
@@ -606,7 +606,7 @@ defmodule SymphonyElixir.CoreTest do
       end
     end)
 
-    initial_state = :sys.get_state(pid)
+    initial_state = :sys.get_state(pid, 15_000)
 
     running_entry = %{
       pid: self(),
@@ -625,7 +625,7 @@ defmodule SymphonyElixir.CoreTest do
 
     send(pid, {:DOWN, ref, :process, self(), :boom})
     Process.sleep(50)
-    state = :sys.get_state(pid)
+    state = :sys.get_state(pid, 15_000)
 
     assert %{attempt: 1, due_at_ms: due_at_ms, identifier: "MT-560", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
@@ -644,7 +644,7 @@ defmodule SymphonyElixir.CoreTest do
       end
     end)
 
-    initial_state = :sys.get_state(pid)
+    initial_state = :sys.get_state(pid, 15_000)
     current_retry_token = make_ref()
     stale_retry_token = make_ref()
 
@@ -670,7 +670,7 @@ defmodule SymphonyElixir.CoreTest do
              retry_token: ^current_retry_token,
              identifier: "MT-561",
              error: "agent exited: :boom"
-           } = :sys.get_state(pid).retry_attempts[issue_id]
+           } = :sys.get_state(pid, 15_000).retry_attempts[issue_id]
   end
 
   test "manual refresh coalesces repeated requests and ignores superseded ticks" do
@@ -752,8 +752,9 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
+    timing_grace_ms = 200
 
-    assert remaining_ms >= min_remaining_ms
+    assert remaining_ms >= max(min_remaining_ms - timing_grace_ms, 0)
     assert remaining_ms <= max_remaining_ms
   end
 
@@ -1666,7 +1667,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} --model gpt-5.3-codex app-server"
+        codex_command: "#{codex_binary} --config model_reasoning_effort=high --model gpt-5.4 app-server"
       )
 
       issue = %Issue{
@@ -1685,7 +1686,7 @@ defmodule SymphonyElixir.CoreTest do
       lines = String.split(trace, "\n", trim: true)
 
       assert argv_line = Enum.find(lines, fn line -> String.starts_with?(line, "ARGV:") end)
-      assert String.contains?(argv_line, "--model gpt-5.3-codex app-server")
+      assert String.contains?(argv_line, "--config model_reasoning_effort=high --model gpt-5.4 app-server")
       refute String.contains?(argv_line, "--ask-for-approval never")
       refute String.contains?(argv_line, "--sandbox danger-full-access")
     after

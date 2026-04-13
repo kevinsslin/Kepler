@@ -6,6 +6,8 @@ defmodule SymphonyElixirWeb.Router do
   use Phoenix.Router
   import Phoenix.LiveView.Router
 
+  @kepler_webhook_path SymphonyElixir.Kepler.Config.Schema.fixed_linear_webhook_path()
+
   pipeline :browser do
     plug(:fetch_session)
     plug(:fetch_live_flash)
@@ -29,9 +31,17 @@ defmodule SymphonyElixirWeb.Router do
 
   scope "/", SymphonyElixirWeb do
     get("/api/v1/state", ObservabilityApiController, :state)
+    get("/api/v1/kepler/health", KeplerApiController, :health)
+    get("/api/v1/kepler/runs", KeplerApiController, :runs)
+    get("/linear/oauth/callback", KeplerApiController, :oauth_callback)
+    post(@kepler_webhook_path, KeplerWebhookController, :create)
 
     match(:*, "/", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/state", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/kepler/health", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/kepler/runs", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/linear/oauth/callback", ObservabilityApiController, :method_not_allowed)
+    match(:*, @kepler_webhook_path, ObservabilityApiController, :method_not_allowed)
     post("/api/v1/refresh", ObservabilityApiController, :refresh)
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)
     get("/api/v1/:issue_identifier", ObservabilityApiController, :issue)

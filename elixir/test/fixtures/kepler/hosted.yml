@@ -1,0 +1,89 @@
+service_name: "Hosted Kepler"
+
+linear:
+  api_key: $LINEAR_API_KEY
+  webhook_secret: $LINEAR_WEBHOOK_SECRET
+
+github:
+  bot_name: "Hosted Kepler Bot"
+  bot_email: "kepler-bot@example.com"
+
+workspace:
+  root: $KEPLER_WORKSPACE_ROOT
+
+state:
+  root: $KEPLER_STATE_ROOT
+  file_name: "runs.json"
+
+limits:
+  max_concurrent_runs: 2
+  dispatch_interval_ms: 1000
+
+routing:
+  fallback_workflow_path: $KEPLER_FALLBACK_WORKFLOW_PATH
+  ambiguous_choice_limit: 3
+
+repositories:
+  - id: "api"
+    full_name: "example-org/example-api"
+    clone_url: "https://github.com/example-org/example-api.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:api"]
+
+  - id: "web"
+    full_name: "example-org/example-web"
+    clone_url: "https://github.com/example-org/example-web.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:web"]
+
+  - id: "worker"
+    full_name: "example-org/example-worker"
+    clone_url: "https://github.com/example-org/example-worker.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:worker"]
+
+  - id: "docs"
+    full_name: "example-org/example-docs"
+    clone_url: "https://github.com/example-org/example-docs.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:docs"]
+
+  - id: "ops"
+    full_name: "example-org/example-ops"
+    clone_url: "https://github.com/example-org/example-ops.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:ops"]
+
+  - id: "events"
+    full_name: "example-org/example-events"
+    clone_url: "https://github.com/example-org/example-events.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:events"]
+
+  - id: "contracts"
+    full_name: "example-org/example-contracts"
+    clone_url: "https://github.com/example-org/example-contracts.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:contracts"]
+
+  - id: "admin-ui"
+    full_name: "example-org/example-admin-ui"
+    clone_url: "https://github.com/example-org/example-admin-ui.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:admin-ui"]

@@ -1,0 +1,101 @@
+service_name: "Kepler"
+
+# This example is intentionally env-backed so secrets do not live in the file.
+# For local runs, copy templates/.env.kepler.example to .env.kepler and start
+# Kepler via scripts/run-kepler.sh so the process sees those variables.
+# For end-to-end setup steps, see docs/kepler-self-hosting.md.
+# Kepler loads this config at boot and caches it in memory.
+# Restart the service after editing this file or rotating env-backed secrets.
+
+server:
+  host: "0.0.0.0"
+  port: 4040
+  # Optional but recommended if you want to expose /api/v1/kepler/runs.
+  # When omitted, that endpoint stays disabled.
+  api_token: $KEPLER_API_TOKEN
+
+linear:
+  endpoint: "https://api.linear.app/graphql"
+  # Preferred runtime auth: OAuth app client credentials.
+  client_id: $LINEAR_CLIENT_ID
+  client_secret: $LINEAR_CLIENT_SECRET
+  oauth_token_url: "https://api.linear.app/oauth/token"
+  oauth_scopes: ["read", "write", "app:assignable", "app:mentionable"]
+  # Fallback only: personal/workspace API key for staging or migration.
+  # api_key: $LINEAR_API_KEY
+  webhook_secret: $LINEAR_WEBHOOK_SECRET # required
+  workspace_id: "" # optional; reserved for future use
+  agent_name: "Kepler" # display name only
+
+github:
+  api_url: "https://api.github.com"
+  # GitHub auth is required for every run.
+  # Preferred: set app_id + private_key_path below.
+  # Fallback: omit these and provide a host-level GITHUB_TOKEN instead.
+  app_id: $GITHUB_APP_ID
+  private_key_path: $GITHUB_APP_PRIVATE_KEY_PATH
+  # private_key: $GITHUB_APP_PRIVATE_KEY
+  bot_name: "Kepler Bot"
+  bot_email: "kepler-bot@users.noreply.github.com"
+
+workspace:
+  root: $KEPLER_WORKSPACE_ROOT # required persistent writable path
+
+state:
+  root: $KEPLER_STATE_ROOT # required persistent writable path
+  file_name: "runs.json"
+  # The runtime retains only a bounded recent window of terminal runs in this file.
+  # Treat it as operational state, not as an infinite audit archive.
+
+limits:
+  max_concurrent_runs: 2
+  dispatch_interval_ms: 1000
+
+routing:
+  # Used only when a repo does not provide its own WORKFLOW.md.
+  # The bundled fallback is intended to be a usable shared org default:
+  # it requires a stable issue branch, repo-native validation, commit/push,
+  # and branch reuse so follow-up runs update the same PR.
+  # A repo-local file at repository.workflow_path still overrides this automatically.
+  fallback_workflow_path: "./priv/templates/WORKFLOW.kepler.template.md"
+  ambiguous_choice_limit: 3
+
+repositories:
+  # Kepler only operates on repositories registered here.
+  # Routing checks these registrations in this order:
+  # 1. explicit selectors below
+  # 2. Linear repository suggestions
+  # 3. user clarification in the agent session
+  #
+  # Current v1 selector semantics are OR-based:
+  # if labels OR team_keys OR project_ids OR project_slugs match, that repo becomes a candidate.
+  # The safest pattern is one unique repo:* label per repository.
+  # Only add team/project selectors if they stay non-overlapping.
+  - id: "api"
+    full_name: "your-org/your-api-repo"
+    # Prefer HTTPS GitHub clone URLs in v1.
+    clone_url: "https://github.com/your-org/your-api-repo.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex" # the only supported provider in v1
+    # optional if Kepler can resolve the installation dynamically
+    github_installation_id: 123456
+    labels: ["repo:api"]
+  - id: "web"
+    full_name: "your-org/your-web-repo"
+    clone_url: "https://github.com/your-org/your-web-repo.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    github_installation_id: 123456
+    labels: ["repo:web"]
+
+  # Optional secondary selector example, only if it stays unique:
+  # - id: "mobile"
+  #   full_name: "your-org/your-mobile-repo"
+  #   clone_url: "https://github.com/your-org/your-mobile-repo.git"
+  #   default_branch: "main"
+  #   workflow_path: "WORKFLOW.md"
+  #   provider: "codex"
+  #   labels: ["repo:mobile"]
+  #   team_keys: ["MOBILE"]

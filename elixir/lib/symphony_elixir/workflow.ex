@@ -53,11 +53,16 @@ defmodule SymphonyElixir.Workflow do
   def load(path) when is_binary(path) do
     case File.read(path) do
       {:ok, content} ->
-        parse(content)
+        load_from_string(content)
 
       {:error, reason} ->
         {:error, {:missing_workflow_file, path, reason}}
     end
+  end
+
+  @spec load_from_string(String.t()) :: {:ok, loaded_workflow()} | {:error, term()}
+  def load_from_string(content) when is_binary(content) do
+    parse(content)
   end
 
   defp parse(content) do

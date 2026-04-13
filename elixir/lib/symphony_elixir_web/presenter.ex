@@ -3,13 +3,17 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
+  alias SymphonyElixir.{Config, Orchestrator, RuntimeMode, StatusDashboard}
+  alias SymphonyElixir.Kepler.Config, as: KeplerConfig
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
     generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+      %{mode: "kepler"} = snapshot ->
+        kepler_state_payload(snapshot, generated_at)
+
       %{} = snapshot ->
         %{
           generated_at: generated_at,
@@ -34,6 +38,12 @@ defmodule SymphonyElixirWeb.Presenter do
   @spec issue_payload(String.t(), GenServer.name(), timeout()) :: {:ok, map()} | {:error, :issue_not_found}
   def issue_payload(issue_identifier, orchestrator, snapshot_timeout_ms) when is_binary(issue_identifier) do
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+      %{mode: "kepler", runs: runs} ->
+        case Enum.find(runs, &(&1.linear_issue_identifier == issue_identifier)) do
+          nil -> {:error, :issue_not_found}
+          run -> {:ok, kepler_issue_payload(run)}
+        end
+
       %{} = snapshot ->
         running = Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
         retry = Enum.find(snapshot.retrying, &(&1.identifier == issue_identifier))
@@ -55,7 +65,7 @@ defmodule SymphonyElixirWeb.Presenter do
       :unavailable ->
         {:error, :unavailable}
 
-      payload ->
+      %{} = payload ->
         {:ok, Map.update!(payload, :requested_at, &DateTime.to_iso8601/1)}
     end
   end
@@ -160,7 +170,7 @@ defmodule SymphonyElixirWeb.Presenter do
   defp workspace_path(issue_identifier, running, retry) do
     (running && Map.get(running, :workspace_path)) ||
       (retry && Map.get(retry, :workspace_path)) ||
-      Path.join(Config.settings!().workspace.root, issue_identifier)
+      Path.join(workspace_root(), issue_identifier)
   end
 
   defp workspace_host(running, retry) do
@@ -197,4 +207,81 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp iso8601(_datetime), do: nil
+
+  defp kepler_state_payload(snapshot, generated_at) do
+    running = Enum.filter(snapshot.runs, &(&1.status == "executing"))
+    retrying = Enum.filter(snapshot.runs, &(&1.status == "queued"))
+
+    %{
+      generated_at: generated_at,
+      counts: %{
+        running: length(running),
+        retrying: length(retrying)
+      },
+      running: Enum.map(running, &kepler_running_entry_payload/1),
+      retrying: Enum.map(retrying, &kepler_retry_entry_payload/1),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      rate_limits: nil
+    }
+  end
+
+  defp kepler_running_entry_payload(run) do
+    %{
+      issue_id: run.linear_issue_id,
+      issue_identifier: run.linear_issue_identifier,
+      state: run.status,
+      worker_host: nil,
+      workspace_path: run.workspace_path,
+      session_id: run.linear_agent_session_id,
+      turn_count: 0,
+      last_event: run.status,
+      last_message: run.summary || run.routing_reason,
+      started_at: run.created_at,
+      last_event_at: run.updated_at,
+      tokens: %{input_tokens: 0, output_tokens: 0, total_tokens: 0}
+    }
+  end
+
+  defp kepler_retry_entry_payload(run) do
+    %{
+      issue_id: run.linear_issue_id,
+      issue_identifier: run.linear_issue_identifier,
+      attempt: 1,
+      due_at: run.updated_at,
+      error: run.last_error,
+      worker_host: nil,
+      workspace_path: run.workspace_path
+    }
+  end
+
+  defp kepler_issue_payload(run) do
+    %{
+      issue_identifier: run.linear_issue_identifier,
+      issue_id: run.linear_issue_id,
+      status: run.status,
+      workspace: %{
+        path: run.workspace_path,
+        host: nil
+      },
+      attempts: %{
+        restart_count: 0,
+        current_retry_attempt: 0
+      },
+      running: nil,
+      retry: nil,
+      logs: %{
+        codex_session_logs: []
+      },
+      recent_events: [],
+      last_error: run.last_error,
+      tracked: %{}
+    }
+  end
+
+  defp workspace_root do
+    case RuntimeMode.current() do
+      :kepler -> KeplerConfig.settings!().workspace.root
+      :workflow -> Config.settings!().workspace.root
+    end
+  end
 end
