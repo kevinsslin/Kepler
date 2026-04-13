@@ -752,7 +752,10 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    timing_grace_ms = 200
+    # Coverage runs on shared CI runners can observe multi-second scheduling jitter for
+    # the longer exponential backoff cases. Scale the lower-bound grace with the expected
+    # delay so we keep asserting the retry tier without turning the test flaky.
+    timing_grace_ms = max(200, div(min_remaining_ms, 10))
 
     assert remaining_ms >= max(min_remaining_ms - timing_grace_ms, 0)
     assert remaining_ms <= max_remaining_ms
