@@ -3,6 +3,7 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
   """
 
+  alias SymphonyElixir.Kepler.Config, as: KeplerConfig
   alias SymphonyElixir.LogFile
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
@@ -12,8 +13,10 @@ defmodule SymphonyElixir.CLI do
   @type deps :: %{
           file_regular?: (String.t() -> boolean()),
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
+          set_kepler_config_file_path: (String.t() -> :ok | {:error, term()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
+          set_runtime_mode: (SymphonyElixir.RuntimeMode.t() -> :ok | {:error, term()}),
           ensure_all_started: (-> ensure_started_result())
         }
 
@@ -29,8 +32,24 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
+  def evaluate(args, deps \\ runtime_deps())
+
   @spec evaluate([String.t()], deps()) :: :ok | {:error, String.t()}
-  def evaluate(args, deps \\ runtime_deps()) do
+  def evaluate(["kepler" | rest], deps) do
+    case OptionParser.parse(rest, strict: @switches ++ [config: :string]) do
+      {opts, [], []} ->
+        with :ok <- require_guardrails_acknowledgement(opts),
+             :ok <- maybe_set_logs_root(opts, deps),
+             :ok <- maybe_set_server_port(opts, deps) do
+          run_kepler(kepler_config_path(opts), deps)
+        end
+
+      _ ->
+        {:error, kepler_usage_message()}
+    end
+  end
+
+  def evaluate(args, deps) do
     case OptionParser.parse(args, strict: @switches) do
       {opts, [], []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
@@ -56,6 +75,7 @@ defmodule SymphonyElixir.CLI do
     expanded_path = Path.expand(workflow_path)
 
     if deps.file_regular?.(expanded_path) do
+      :ok = deps.set_runtime_mode.(:workflow)
       :ok = deps.set_workflow_file_path.(expanded_path)
 
       case deps.ensure_all_started.() do
@@ -75,15 +95,42 @@ defmodule SymphonyElixir.CLI do
     "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
   end
 
+  @spec kepler_usage_message() :: String.t()
+  defp kepler_usage_message do
+    "Usage: symphony kepler [--logs-root <path>] [--port <port>] [--config <path>]"
+  end
+
   @spec runtime_deps() :: deps()
   defp runtime_deps do
     %{
       file_regular?: &File.regular?/1,
       set_workflow_file_path: &SymphonyElixir.Workflow.set_workflow_file_path/1,
+      set_kepler_config_file_path: &KeplerConfig.set_config_file_path/1,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,
+      set_runtime_mode: &SymphonyElixir.RuntimeMode.set/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end
     }
+  end
+
+  @spec run_kepler(String.t(), deps()) :: :ok | {:error, String.t()}
+  def run_kepler(config_path, deps) do
+    expanded_path = Path.expand(config_path)
+
+    if deps.file_regular?.(expanded_path) do
+      :ok = deps.set_runtime_mode.(:kepler)
+      :ok = deps.set_kepler_config_file_path.(expanded_path)
+
+      case deps.ensure_all_started.() do
+        {:ok, _started_apps} ->
+          :ok
+
+        {:error, reason} ->
+          {:error, "Failed to start Kepler with config #{expanded_path}: #{inspect(reason)}"}
+      end
+    else
+      {:error, "Kepler config file not found: #{expanded_path}"}
+    end
   end
 
   defp maybe_set_logs_root(opts, deps) do
@@ -146,6 +193,13 @@ defmodule SymphonyElixir.CLI do
   defp set_logs_root(logs_root) do
     Application.put_env(:symphony_elixir, :log_file, LogFile.default_log_file(logs_root))
     :ok
+  end
+
+  defp kepler_config_path(opts) do
+    case Keyword.get_values(opts, :config) do
+      [] -> Path.expand("kepler.yml")
+      values -> values |> List.last() |> Path.expand()
+    end
   end
 
   defp maybe_set_server_port(opts, deps) do

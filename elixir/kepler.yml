@@ -1,0 +1,122 @@
+service_name: "Kepler"
+
+# Railway-ready generic deployment config.
+# This file intentionally keeps all secrets in environment variables.
+# Override KEPLER_CONFIG_PATH if you want to run a different deployment config.
+
+server:
+  host: "0.0.0.0"
+  port: 4040
+  api_token: $KEPLER_API_TOKEN
+
+linear:
+  endpoint: "https://api.linear.app/graphql"
+  # Preferred production path.
+  client_id: $LINEAR_CLIENT_ID
+  client_secret: $LINEAR_CLIENT_SECRET
+  oauth_token_url: "https://api.linear.app/oauth/token"
+  oauth_scopes: ["read", "write", "app:assignable", "app:mentionable"]
+  # Supported fallback for staging or migration.
+  api_key: $LINEAR_API_KEY
+  webhook_secret: $LINEAR_WEBHOOK_SECRET
+  workspace_id: ""
+  agent_name: "Kepler"
+
+github:
+  api_url: "https://api.github.com"
+  # Preferred production path:
+  #   GITHUB_APP_ID
+  #   GITHUB_APP_PRIVATE_KEY
+  #
+  # Railway/Docker operators should usually set GITHUB_APP_PRIVATE_KEY_BASE64
+  # in the platform secret store and let the shipped container entrypoint decode
+  # it into GITHUB_APP_PRIVATE_KEY before Kepler starts.
+  #
+  # Supported fallback:
+  #   GITHUB_TOKEN
+  app_id: $GITHUB_APP_ID
+  private_key: $GITHUB_APP_PRIVATE_KEY
+  bot_name: "Kepler Bot"
+  bot_email: "kepler-bot@users.noreply.github.com"
+
+workspace:
+  root: $KEPLER_WORKSPACE_ROOT
+
+state:
+  root: $KEPLER_STATE_ROOT
+  file_name: "runs.json"
+
+limits:
+  max_concurrent_runs: 1
+  dispatch_interval_ms: 1000
+
+routing:
+  fallback_workflow_path: "./priv/templates/WORKFLOW.kepler.template.md"
+  ambiguous_choice_limit: 3
+
+repositories:
+  # Keep final routing deterministic with exactly one repo:* label per issue.
+
+  - id: "api"
+    full_name: "example-org/example-api"
+    clone_url: "https://github.com/example-org/example-api.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:api"]
+
+  - id: "web"
+    full_name: "example-org/example-web"
+    clone_url: "https://github.com/example-org/example-web.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:web"]
+
+  - id: "worker"
+    full_name: "example-org/example-worker"
+    clone_url: "https://github.com/example-org/example-worker.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:worker"]
+
+  - id: "docs"
+    full_name: "example-org/example-docs"
+    clone_url: "https://github.com/example-org/example-docs.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:docs"]
+
+  - id: "ops"
+    full_name: "example-org/example-ops"
+    clone_url: "https://github.com/example-org/example-ops.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:ops"]
+
+  - id: "events"
+    full_name: "example-org/example-events"
+    clone_url: "https://github.com/example-org/example-events.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:events"]
+
+  - id: "contracts"
+    full_name: "example-org/example-contracts"
+    clone_url: "https://github.com/example-org/example-contracts.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:contracts"]
+
+  - id: "admin-ui"
+    full_name: "example-org/example-admin-ui"
+    clone_url: "https://github.com/example-org/example-admin-ui.git"
+    default_branch: "main"
+    workflow_path: "WORKFLOW.md"
+    provider: "codex"
+    labels: ["repo:admin-ui"]

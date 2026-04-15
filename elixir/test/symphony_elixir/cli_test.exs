@@ -17,12 +17,20 @@ defmodule SymphonyElixir.CLITest do
         send(parent, :workflow_set)
         :ok
       end,
+      set_kepler_config_file_path: fn _path ->
+        send(parent, :kepler_config_set)
+        :ok
+      end,
       set_logs_root: fn _path ->
         send(parent, :logs_root_set)
         :ok
       end,
       set_server_port_override: fn _port ->
         send(parent, :port_set)
+        :ok
+      end,
+      set_runtime_mode: fn _mode ->
+        send(parent, :runtime_mode_set)
         :ok
       end,
       ensure_all_started: fn ->
@@ -38,8 +46,10 @@ defmodule SymphonyElixir.CLITest do
     assert banner =~ @ack_flag
     refute_received :file_checked
     refute_received :workflow_set
+    refute_received :kepler_config_set
     refute_received :logs_root_set
     refute_received :port_set
+    refute_received :runtime_mode_set
     refute_received :started
   end
 
@@ -47,8 +57,10 @@ defmodule SymphonyElixir.CLITest do
     deps = %{
       file_regular?: fn path -> Path.basename(path) == "WORKFLOW.md" end,
       set_workflow_file_path: fn _path -> :ok end,
+      set_kepler_config_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      set_runtime_mode: fn _mode -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
@@ -69,8 +81,10 @@ defmodule SymphonyElixir.CLITest do
         send(parent, {:workflow_set, path})
         :ok
       end,
+      set_kepler_config_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      set_runtime_mode: fn _mode -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
@@ -85,11 +99,13 @@ defmodule SymphonyElixir.CLITest do
     deps = %{
       file_regular?: fn _path -> true end,
       set_workflow_file_path: fn _path -> :ok end,
+      set_kepler_config_file_path: fn _path -> :ok end,
       set_logs_root: fn path ->
         send(parent, {:logs_root, path})
         :ok
       end,
       set_server_port_override: fn _port -> :ok end,
+      set_runtime_mode: fn _mode -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
@@ -102,8 +118,10 @@ defmodule SymphonyElixir.CLITest do
     deps = %{
       file_regular?: fn _path -> false end,
       set_workflow_file_path: fn _path -> :ok end,
+      set_kepler_config_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      set_runtime_mode: fn _mode -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
@@ -115,8 +133,10 @@ defmodule SymphonyElixir.CLITest do
     deps = %{
       file_regular?: fn _path -> true end,
       set_workflow_file_path: fn _path -> :ok end,
+      set_kepler_config_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      set_runtime_mode: fn _mode -> :ok end,
       ensure_all_started: fn -> {:error, :boom} end
     }
 
@@ -129,11 +149,58 @@ defmodule SymphonyElixir.CLITest do
     deps = %{
       file_regular?: fn _path -> true end,
       set_workflow_file_path: fn _path -> :ok end,
+      set_kepler_config_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      set_runtime_mode: fn _mode -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
     assert :ok = CLI.evaluate([@ack_flag, "WORKFLOW.md"], deps)
+  end
+
+  test "starts Kepler mode with an explicit config path" do
+    parent = self()
+    config_path = "tmp/kepler.yml"
+    expanded_path = Path.expand(config_path)
+
+    deps = %{
+      file_regular?: fn path ->
+        send(parent, {:config_checked, path})
+        path == expanded_path
+      end,
+      set_workflow_file_path: fn _path -> :ok end,
+      set_kepler_config_file_path: fn path ->
+        send(parent, {:kepler_config_set, path})
+        :ok
+      end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      set_runtime_mode: fn mode ->
+        send(parent, {:runtime_mode, mode})
+        :ok
+      end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    assert :ok = CLI.evaluate(["kepler", @ack_flag, "--config", config_path], deps)
+    assert_received {:config_checked, ^expanded_path}
+    assert_received {:kepler_config_set, ^expanded_path}
+    assert_received {:runtime_mode, :kepler}
+  end
+
+  test "returns not found when Kepler config does not exist" do
+    deps = %{
+      file_regular?: fn _path -> false end,
+      set_workflow_file_path: fn _path -> :ok end,
+      set_kepler_config_file_path: fn _path -> :ok end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      set_runtime_mode: fn _mode -> :ok end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    assert {:error, message} = CLI.evaluate(["kepler", @ack_flag, "--config", "kepler.yml"], deps)
+    assert message =~ "Kepler config file not found:"
   end
 end

@@ -3,7 +3,9 @@ defmodule SymphonyElixir.HttpServer do
   Compatibility facade that starts the Phoenix observability endpoint when enabled.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator}
+  alias SymphonyElixir.{Config, Orchestrator, RuntimeMode}
+  alias SymphonyElixir.Kepler.Config, as: KeplerConfig
+  alias SymphonyElixir.Kepler.ControlPlane
   alias SymphonyElixirWeb.Endpoint
 
   @secret_key_bytes 48
@@ -18,10 +20,10 @@ defmodule SymphonyElixir.HttpServer do
 
   @spec start_link(keyword()) :: GenServer.on_start() | :ignore
   def start_link(opts \\ []) do
-    case Keyword.get(opts, :port, Config.server_port()) do
+    case Keyword.get(opts, :port, configured_port()) do
       port when is_integer(port) and port >= 0 ->
-        host = Keyword.get(opts, :host, Config.settings!().server.host)
-        orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
+        host = Keyword.get(opts, :host, configured_host())
+        orchestrator = Keyword.get(opts, :orchestrator, default_orchestrator())
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
         with {:ok, ip} <- parse_host(host) do
@@ -81,6 +83,27 @@ defmodule SymphonyElixir.HttpServer do
   defp normalize_host(host) when host in ["", nil], do: "127.0.0.1"
   defp normalize_host(host) when is_binary(host), do: host
   defp normalize_host(host), do: to_string(host)
+
+  defp configured_port do
+    case RuntimeMode.current() do
+      :kepler -> KeplerConfig.settings!().server.port
+      :workflow -> Config.server_port()
+    end
+  end
+
+  defp configured_host do
+    case RuntimeMode.current() do
+      :kepler -> KeplerConfig.settings!().server.host
+      :workflow -> Config.settings!().server.host
+    end
+  end
+
+  defp default_orchestrator do
+    case RuntimeMode.current() do
+      :kepler -> ControlPlane
+      :workflow -> Orchestrator
+    end
+  end
 
   defp secret_key_base do
     Base.encode64(:crypto.strong_rand_bytes(@secret_key_bytes), padding: false)
