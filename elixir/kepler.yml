@@ -28,6 +28,10 @@ github:
   #   GITHUB_APP_ID
   #   GITHUB_APP_PRIVATE_KEY
   #
+  # Railway/Docker operators should usually set GITHUB_APP_PRIVATE_KEY_BASE64
+  # in the platform secret store and let the shipped container entrypoint decode
+  # it into GITHUB_APP_PRIVATE_KEY before Kepler starts.
+  #
   # Supported fallback:
   #   GITHUB_TOKEN
   app_id: $GITHUB_APP_ID

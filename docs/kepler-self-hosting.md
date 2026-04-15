@@ -28,8 +28,9 @@ Before you debug webhooks, make sure these choices are explicit:
 
 ### GitHub auth: choose one
 
-- Preferred: `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY_PATH`
+- Preferred for Railway/Docker: `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY_BASE64`
 - Also supported: `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`
+- VM/local fallback: `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY_PATH`
 - Fallback only: `GITHUB_TOKEN`
 
 ### Codex runtime: choose one
@@ -247,6 +248,35 @@ Best practice:
 - keep the installation scope limited to the exact repositories in `kepler.yml`
 - use `https://github.com/<org>/<repo>.git` as `clone_url`
 - optionally set `github_installation_id` per repo if you want to avoid dynamic installation lookup
+
+For Railway/Docker, do not try to place the downloaded PEM on the container filesystem and point
+Kepler at a path. Instead:
+
+1. Generate a private key in the GitHub App settings page.
+2. Download the `.pem` file locally.
+3. Convert that PEM to base64 on your machine.
+4. Store the base64 string in the deployment platform as `GITHUB_APP_PRIVATE_KEY_BASE64`.
+5. Keep `kepler.yml` on `github.private_key: $GITHUB_APP_PRIVATE_KEY`.
+
+The shipped container entrypoint already decodes `GITHUB_APP_PRIVATE_KEY_BASE64` into
+`GITHUB_APP_PRIVATE_KEY` before Kepler boots.
+
+Example PEM to base64 commands:
+
+macOS:
+
+```bash
+base64 -i /absolute/path/to/kepler-github-app.pem | pbcopy
+```
+
+Linux:
+
+```bash
+base64 -w 0 /absolute/path/to/kepler-github-app.pem
+```
+
+If `pbcopy` is not available, remove the pipe and copy the printed output manually. The important
+part is that the final secret value is one single base64 line.
 
 If you use `GITHUB_TOKEN` instead:
 
@@ -498,9 +528,9 @@ Recommended production variables:
 | `CODEX_BIN` | Required if the fallback workflow is used unchanged | Codex executable for the bundled shared workflow. |
 | `OPENAI_API_KEY` | Yes for the shipped Docker/Railway deployment | Non-interactive Codex login at container startup. |
 | `GITHUB_APP_ID` | Yes, unless `GITHUB_TOKEN` is used | GitHub App auth path. |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Yes, unless `GITHUB_TOKEN` or inline private key is used | Preferred GitHub App key path. |
-| `GITHUB_APP_PRIVATE_KEY` | Yes, unless `GITHUB_TOKEN` or private_key_path is used | Inline GitHub App private key. |
-| `GITHUB_APP_PRIVATE_KEY_BASE64` | Optional convenience for container platforms | Decoded into `GITHUB_APP_PRIVATE_KEY` by the shipped container entrypoint. |
+| `GITHUB_APP_PRIVATE_KEY_BASE64` | Yes for the recommended Railway/Docker path, unless `GITHUB_TOKEN` is used | Preferred GitHub App key secret for container platforms; decoded into `GITHUB_APP_PRIVATE_KEY` by the shipped entrypoint. |
+| `GITHUB_APP_PRIVATE_KEY` | Yes, unless `GITHUB_TOKEN`, `GITHUB_APP_PRIVATE_KEY_BASE64`, or `private_key_path` is used | Inline GitHub App private key. |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | VM/local fallback only | Filesystem path to a PEM file on hosts where you control a stable path. |
 | `GITHUB_TOKEN` | Optional fallback | Fallback GitHub runtime auth. |
 
 ## `kepler.yml` Guidance
@@ -618,7 +648,7 @@ Recommended Railway operator steps:
      - preferred: `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`
      - fallback: `LINEAR_API_KEY`
    - GitHub auth:
-     - preferred: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`
+     - preferred: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_BASE64`
      - fallback: `GITHUB_TOKEN`
 5. Generate a Railway public domain.
 6. After the service is live, wire that public URL into the Linear app:

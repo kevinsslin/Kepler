@@ -190,7 +190,7 @@ Required Railway secrets for the bundled config:
   - `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET`
   - or `LINEAR_API_KEY` as a staging fallback
 - either:
-  - `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`
+  - `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_BASE64`
   - or `GITHUB_TOKEN` as a fallback
 
 Optional but recommended:
@@ -202,6 +202,17 @@ The container default also sets:
 - `HOME=/data/home`
 - `CODEX_BIN=codex`
 - `KEPLER_CONFIG_PATH=/app/elixir/kepler.yml`
+
+GitHub App key handling for Railway/Docker:
+
+- generate a GitHub App private key from the GitHub App settings page
+- convert the downloaded PEM to base64 on your machine
+- store that value in Railway as `GITHUB_APP_PRIVATE_KEY_BASE64`
+- let the shipped container entrypoint decode it into `GITHUB_APP_PRIVATE_KEY`
+- keep `kepler.yml` on `github.private_key: $GITHUB_APP_PRIVATE_KEY`
+
+Use `GITHUB_APP_PRIVATE_KEY_PATH` only for VM/local deployments where you actually control a stable
+filesystem path to the PEM file.
 
 ## Linear Setup Summary
 

@@ -30,11 +30,14 @@ linear:
 github:
   api_url: "https://api.github.com"
   # GitHub auth is required for every run.
-  # Preferred: set app_id + private_key_path below.
+  # Preferred for Railway/Docker: set app_id + private_key below.
+  # In container deploys, provide GITHUB_APP_PRIVATE_KEY_BASE64 and let the
+  # shipped entrypoint decode it into GITHUB_APP_PRIVATE_KEY at startup.
+  # VM/local fallback: use private_key_path instead.
   # Fallback: omit these and provide a host-level GITHUB_TOKEN instead.
   app_id: $GITHUB_APP_ID
-  private_key_path: $GITHUB_APP_PRIVATE_KEY_PATH
-  # private_key: $GITHUB_APP_PRIVATE_KEY
+  private_key: $GITHUB_APP_PRIVATE_KEY
+  # private_key_path: $GITHUB_APP_PRIVATE_KEY_PATH
   bot_name: "Kepler Bot"
   bot_email: "kepler-bot@users.noreply.github.com"
 
