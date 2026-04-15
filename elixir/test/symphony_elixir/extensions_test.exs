@@ -4,6 +4,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
+  alias SymphonyElixir.Kepler.Config, as: KeplerConfig
   alias SymphonyElixir.Linear.Adapter
   alias SymphonyElixir.Tracker.Memory
 
@@ -99,6 +100,62 @@ defmodule SymphonyElixir.ExtensionsTest do
     end)
 
     :ok
+  end
+
+  test "http server honors server port override in kepler mode" do
+    original_runtime_mode = Application.get_env(:symphony_elixir, :runtime_mode)
+    original_config_path = Application.get_env(:symphony_elixir, :kepler_config_file_path)
+    original_linear_api_key = System.get_env("LINEAR_API_KEY")
+    original_linear_webhook_secret = System.get_env("LINEAR_WEBHOOK_SECRET")
+    original_workspace_root = System.get_env("KEPLER_WORKSPACE_ROOT")
+    original_state_root = System.get_env("KEPLER_STATE_ROOT")
+    original_github_token = System.get_env("GITHUB_TOKEN")
+    original_fallback_path = System.get_env("KEPLER_FALLBACK_WORKFLOW_PATH")
+
+    fixture_path = Path.expand("../fixtures/kepler/hosted.yml", __DIR__)
+    workspace_root = Path.join(System.tmp_dir!(), "kepler-http-workspaces-#{System.unique_integer([:positive])}")
+    state_root = Path.join(System.tmp_dir!(), "kepler-http-state-#{System.unique_integer([:positive])}")
+    fallback_path = Path.expand("../../priv/templates/WORKFLOW.kepler.template.md", __DIR__)
+
+    System.put_env("LINEAR_API_KEY", "linear-token")
+    System.put_env("LINEAR_WEBHOOK_SECRET", "linear-webhook-secret")
+    System.put_env("KEPLER_WORKSPACE_ROOT", workspace_root)
+    System.put_env("KEPLER_STATE_ROOT", state_root)
+    System.put_env("KEPLER_FALLBACK_WORKFLOW_PATH", fallback_path)
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+    Application.put_env(:symphony_elixir, :runtime_mode, :kepler)
+    KeplerConfig.set_config_file_path(fixture_path)
+    Application.put_env(:symphony_elixir, :server_port_override, 0)
+
+    on_exit(fn ->
+      if is_nil(original_runtime_mode) do
+        Application.delete_env(:symphony_elixir, :runtime_mode)
+      else
+        Application.put_env(:symphony_elixir, :runtime_mode, original_runtime_mode)
+      end
+
+      if is_nil(original_config_path) do
+        KeplerConfig.clear_config_file_path()
+      else
+        KeplerConfig.set_config_file_path(original_config_path)
+      end
+
+      restore_env("LINEAR_API_KEY", original_linear_api_key)
+      restore_env("LINEAR_WEBHOOK_SECRET", original_linear_webhook_secret)
+      restore_env("KEPLER_WORKSPACE_ROOT", original_workspace_root)
+      restore_env("KEPLER_STATE_ROOT", original_state_root)
+      restore_env("GITHUB_TOKEN", original_github_token)
+      restore_env("KEPLER_FALLBACK_WORKFLOW_PATH", original_fallback_path)
+    end)
+
+    start_supervised!({HttpServer, []})
+
+    port = wait_for_bound_port()
+    assert is_integer(port)
+    assert port != 4040
+
+    response = Req.get!("http://127.0.0.1:#{port}/definitely-not-real")
+    assert response.status == 404
   end
 
   test "workflow store reloads changes, keeps last good workflow, and falls back when stopped" do

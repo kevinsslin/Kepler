@@ -85,9 +85,15 @@ defmodule SymphonyElixir.HttpServer do
   defp normalize_host(host), do: to_string(host)
 
   defp configured_port do
-    case RuntimeMode.current() do
-      :kepler -> KeplerConfig.settings!().server.port
-      :workflow -> Config.server_port()
+    case Application.get_env(:symphony_elixir, :server_port_override) do
+      port when is_integer(port) and port >= 0 ->
+        port
+
+      _ ->
+        case RuntimeMode.current() do
+          :kepler -> KeplerConfig.settings!().server.port
+          :workflow -> Config.server_port()
+        end
     end
   end
 
