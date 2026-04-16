@@ -59,6 +59,15 @@ defmodule SymphonyElixir.KeplerTest do
       :ok
     end
 
+    @spec update_issue_state(String.t(), String.t()) :: :ok
+    def update_issue_state(issue_id, state_name) do
+      if recipient = :persistent_term.get({__MODULE__, :recipient}, nil) do
+        send(recipient, {:issue_state_update, issue_id, state_name})
+      end
+
+      :ok
+    end
+
     @spec graphql(String.t(), map(), keyword()) :: {:ok, map()}
     def graphql(_query, _variables, _opts \\ []), do: {:ok, %{}}
   end
@@ -101,14 +110,16 @@ defmodule SymphonyElixir.KeplerTest do
           end
       end
 
-      {:ok,
-       %{
-         branch: "kepler/#{run.linear_issue_identifier}",
-         github_installation_id: 99,
-         pr_url: "https://github.com/example/#{run.repository_id}/pull/1",
-         summary: "Run complete for #{run.repository_id}",
-         workspace_path: "/tmp/#{run.repository_id}"
-       }}
+      result =
+        :persistent_term.get({__MODULE__, :result}, %{
+          branch: "kepler/#{run.linear_issue_identifier}",
+          github_installation_id: 99,
+          pr_url: "https://github.com/example/#{run.repository_id}/pull/1",
+          summary: "Run complete for #{run.repository_id}",
+          workspace_path: "/tmp/#{run.repository_id}"
+        })
+
+      {:ok, result}
     end
   end
 
@@ -139,6 +150,7 @@ defmodule SymphonyElixir.KeplerTest do
     original_fake_linear_recipient = persistent_get({FakeLinearClient, :recipient})
     original_fake_runner_recipient = persistent_get({FakeRunner, :recipient})
     original_fake_runner_release = persistent_get({FakeRunner, :release})
+    original_fake_runner_result = persistent_get({FakeRunner, :result})
     original_github_token = System.get_env("GITHUB_TOKEN")
 
     RuntimeMode.set(:kepler)
@@ -150,6 +162,13 @@ defmodule SymphonyElixir.KeplerTest do
     persistent_put({FakeLinearClient, :recipient}, self())
     persistent_put({FakeRunner, :recipient}, self())
     persistent_put({FakeRunner, :release}, :immediate)
+    persistent_put({FakeRunner, :result}, %{
+      branch: "kepler/KEP-1",
+      github_installation_id: 99,
+      pr_url: "https://github.com/example/repo-api/pull/1",
+      summary: "Run complete for repo-api",
+      workspace_path: "/tmp/repo-api"
+    })
     persistent_put({FakeLinearClient, :suggestions}, [])
 
     start_supervised!(ControlPlane)
@@ -185,6 +204,7 @@ defmodule SymphonyElixir.KeplerTest do
       persistent_restore({FakeLinearClient, :recipient}, original_fake_linear_recipient)
       persistent_restore({FakeRunner, :recipient}, original_fake_runner_recipient)
       persistent_restore({FakeRunner, :release}, original_fake_runner_release)
+      persistent_restore({FakeRunner, :result}, original_fake_runner_result)
       restore_env("GITHUB_TOKEN", original_github_token)
 
       File.rm_rf(config_root)
@@ -229,9 +249,11 @@ defmodule SymphonyElixir.KeplerTest do
                }
              })
 
+    assert_receive {:issue_state_update, "issue-1", "In Progress"}
     assert_receive {:activity, "session-1", %{type: "thought", body: body}}
     assert body =~ "Acknowledged"
     assert_receive {:runner_run, "repo-api", "session-1", []}
+    assert_receive {:issue_state_update, "issue-1", "In Review"}
     assert_receive {:session_update, "session-1", %{externalUrls: [%{label: "Pull Request", url: pr_url}]}}
     assert pr_url =~ "repo-api"
     assert_receive {:issue_attachment, "issue-1", %{title: "Pull Request", url: ^pr_url}}
@@ -575,6 +597,85 @@ defmodule SymphonyElixir.KeplerTest do
     assert_receive {:runner_run, "repo-api", "session-terminal-2", []}
   end
 
+  test "completed runs without a pull request explain the no-op outcome and stay out of review" do
+    persistent_put(
+      {FakeLinearClient, :issue},
+      %SymphonyElixir.Kepler.Linear.IssueContext{
+        id: "issue-noop",
+        identifier: "KEP-NOOP",
+        title: "No-op run",
+        description: "Should not open a PR",
+        labels: ["api"],
+        team_key: "ENG",
+        project_slug: "kepler"
+      }
+    )
+
+    persistent_put({FakeRunner, :result}, %{
+      branch: "kepler/KEP-NOOP",
+      github_installation_id: 99,
+      pr_url: nil,
+      summary: "Current branch: `kepler/KEP-NOOP`.\n\nNo pull request URL was detected.\n\nWorkspace is clean after execution.",
+      workspace_path: "/tmp/repo-api"
+    })
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "created",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-noop",
+                   "issue" => %{"id" => "issue-noop"}
+                 },
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    assert_receive {:issue_state_update, "issue-noop", "In Progress"}
+    assert_receive {:activity, "session-noop", %{type: "response", body: body}}
+    assert body =~ "Run completed without producing code changes"
+    assert body =~ "No pull request URL was detected."
+    refute_receive {:issue_state_update, "issue-noop", "In Review"}, 200
+    refute_receive {:session_update, "session-noop", _input}, 200
+    refute_receive {:issue_attachment, "issue-noop", _input}, 200
+  end
+
+  test "failed runs move the issue into the configured blocked state" do
+    failing_runner = __MODULE__.FailingRunner
+
+    persistent_put(
+      {FakeLinearClient, :issue},
+      %SymphonyElixir.Kepler.Linear.IssueContext{
+        id: "issue-blocked",
+        identifier: "KEP-BLOCKED",
+        title: "Blocked run",
+        description: "Should move to blocked",
+        labels: ["api"],
+        team_key: "ENG",
+        project_slug: "kepler"
+      }
+    )
+
+    Application.put_env(:symphony_elixir, :kepler_execution_runner_module, failing_runner)
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "created",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-blocked",
+                   "issue" => %{"id" => "issue-blocked"}
+                 },
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    assert_receive {:issue_state_update, "issue-blocked", "In Progress"}
+    assert_receive {:issue_state_update, "issue-blocked", "Blocked"}
+    assert_receive {:activity, "session-blocked", %{type: "error", body: error_body}}
+    assert error_body =~ "Run failed"
+  end
+
   test "rejected second sessions get the existing PR backlink when the active run already has one" do
     existing_run_id = "run-existing-pr"
 
@@ -842,6 +943,9 @@ defmodule SymphonyElixir.KeplerTest do
       linear:
         api_key: "linear-token"
         webhook_secret: "linear-secret"
+        executing_state_name: "In Progress"
+        review_state_name: "In Review"
+        blocked_state_name: "Blocked"
       github:
         bot_name: "Kepler Bot"
         bot_email: "kepler@example.com"
@@ -863,6 +967,13 @@ defmodule SymphonyElixir.KeplerTest do
           team_keys: ["WEB"]
       """
     )
+  end
+
+  defmodule FailingRunner do
+    alias SymphonyElixir.Kepler.Run
+
+    @spec run(Run.t(), keyword()) :: {:error, atom()}
+    def run(_run, _opts \\ []), do: {:error, :blocked_for_test}
   end
 
   defp assert_eventually(fun, attempts \\ 20)

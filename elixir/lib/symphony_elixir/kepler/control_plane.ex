@@ -419,12 +419,16 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
     ref = Process.monitor(pid)
 
-    state
-    |> put_run(execution_run)
-    |> dequeue(execution_run.id)
-    |> add_active(execution_run.id)
-    |> put_task_ref(ref, execution_run.id)
-    |> persist_state()
+    updated_state =
+      state
+      |> put_run(execution_run)
+      |> dequeue(execution_run.id)
+      |> add_active(execution_run.id)
+      |> put_task_ref(ref, execution_run.id)
+      |> persist_state()
+
+    maybe_transition_issue_state(execution_run, executing_state_name())
+    updated_state
   end
 
   defp finish_run(state, run_id, status, attrs) do
@@ -466,10 +470,11 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     _ =
       linear_client_module().create_agent_activity(
         run.linear_agent_session_id,
-        response(run.summary || "Run completed.")
+        response(completed_response_body(run))
       )
 
     maybe_attach_pull_request(run)
+    maybe_transition_issue_state_for_completed_run(run)
   end
 
   defp maybe_emit_terminal_activity(%Run{status: "failed"} = run) do
@@ -478,6 +483,8 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         run.linear_agent_session_id,
         error("Run failed: #{run.last_error || "unknown error"}")
       )
+
+    maybe_transition_issue_state(run, blocked_state_name())
   end
 
   defp maybe_emit_terminal_activity(%Run{status: "queued"} = run) do
@@ -489,6 +496,20 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   end
 
   defp maybe_emit_terminal_activity(_run), do: :ok
+
+  defp completed_response_body(%Run{pr_url: nil, summary: summary}) when is_binary(summary) and summary != "" do
+    """
+    Run completed without producing code changes, so no pull request was opened.
+
+    #{summary}
+    """
+    |> String.trim()
+  end
+
+  defp completed_response_body(%Run{summary: summary}) when is_binary(summary) and summary != "",
+    do: summary
+
+  defp completed_response_body(_run), do: "Run completed."
 
   defp maybe_clear_summary(attrs, "queued"), do: Map.put(attrs, :summary, nil)
   defp maybe_clear_summary(attrs, _status), do: attrs
@@ -680,6 +701,12 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     :ok
   end
 
+  defp maybe_transition_issue_state_for_completed_run(%Run{pr_url: nil}), do: :ok
+
+  defp maybe_transition_issue_state_for_completed_run(%Run{} = run) do
+    maybe_transition_issue_state(run, review_state_name())
+  end
+
   defp pull_request_attachment_subtitle(%Run{branch: branch}) when is_binary(branch) and branch != "",
     do: "Open on #{branch}"
 
@@ -689,6 +716,39 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
   defp maybe_log_pull_request_link_failure(run, target, {:error, reason}) do
     Logger.warning("Failed to link pull request for Kepler run #{run.id} target=#{target}: #{inspect(reason)}")
+  end
+
+  defp maybe_transition_issue_state(_run, nil), do: :ok
+  defp maybe_transition_issue_state(_run, ""), do: :ok
+
+  defp maybe_transition_issue_state(%Run{} = run, state_name) do
+    case linear_client_module().update_issue_state(run.linear_issue_id, state_name) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to transition Linear issue #{run.linear_issue_identifier || run.linear_issue_id} to #{inspect(state_name)}: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
+
+  defp executing_state_name do
+    linear_settings().executing_state_name
+  end
+
+  defp review_state_name do
+    linear_settings().review_state_name
+  end
+
+  defp blocked_state_name do
+    linear_settings().blocked_state_name
+  end
+
+  defp linear_settings do
+    Config.settings!().linear
   end
 
   defp thought(body), do: %{type: "thought", body: body}

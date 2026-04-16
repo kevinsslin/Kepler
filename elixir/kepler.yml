@@ -21,6 +21,11 @@ linear:
   webhook_secret: $LINEAR_WEBHOOK_SECRET
   workspace_id: ""
   agent_name: "Kepler"
+  # Optional hosted issue-state mapping. Set these to real Linear state names if
+  # you want Kepler to move issues as runs progress.
+  executing_state_name: $KEPLER_LINEAR_EXECUTING_STATE_NAME
+  review_state_name: $KEPLER_LINEAR_REVIEW_STATE_NAME
+  blocked_state_name: $KEPLER_LINEAR_BLOCKED_STATE_NAME
 
 github:
   api_url: "https://api.github.com"

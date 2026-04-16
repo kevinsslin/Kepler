@@ -26,6 +26,11 @@ linear:
   webhook_secret: $LINEAR_WEBHOOK_SECRET # required
   workspace_id: "" # optional; reserved for future use
   agent_name: "Kepler" # display name only
+  # Optional hosted issue-state mapping. Use exact Linear state names.
+  # Example for an ORBPE-style team:
+  # executing_state_name: "In Progress 進行中"
+  # review_state_name: "In Review 審核中"
+  # blocked_state_name: "Blocked 受阻"
 
 github:
   api_url: "https://api.github.com"

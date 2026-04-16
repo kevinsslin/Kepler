@@ -68,6 +68,23 @@ defmodule SymphonyElixir.KeplerConfigTest do
     assert Schema.linear_auth_mode(settings.linear) == :client_credentials
   end
 
+  test "accepts optional hosted Linear issue state mappings" do
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+
+    assert {:ok, settings} =
+             Config.load_from_string(
+               base_config(
+                 executing_state_name: "\"In Progress 進行中\"",
+                 review_state_name: "\"In Review 審核中\"",
+                 blocked_state_name: "\"Blocked 受阻\""
+               )
+             )
+
+    assert settings.linear.executing_state_name == "In Progress 進行中"
+    assert settings.linear.review_state_name == "In Review 審核中"
+    assert settings.linear.blocked_state_name == "Blocked 受阻"
+  end
+
   test "resolves Linear client credentials from environment variables" do
     client_id_env = "KEPLER_LINEAR_CLIENT_ID_#{System.unique_integer([:positive])}"
     client_secret_env = "KEPLER_LINEAR_CLIENT_SECRET_#{System.unique_integer([:positive])}"
@@ -387,6 +404,9 @@ defmodule SymphonyElixir.KeplerConfigTest do
     client_id = Keyword.get(opts, :client_id, "null")
     client_secret = Keyword.get(opts, :client_secret, "null")
     webhook_secret = Keyword.get(opts, :webhook_secret, "\"linear-secret\"")
+    executing_state_name = Keyword.get(opts, :executing_state_name)
+    review_state_name = Keyword.get(opts, :review_state_name)
+    blocked_state_name = Keyword.get(opts, :blocked_state_name)
     fallback_workflow_path = Keyword.get(opts, :fallback_workflow_path)
     server_api_token = Keyword.get(opts, :server_api_token)
 
@@ -410,13 +430,28 @@ defmodule SymphonyElixir.KeplerConfigTest do
         ""
       end
 
+    state_mapping_lines =
+      [
+        {:executing_state_name, executing_state_name},
+        {:review_state_name, review_state_name},
+        {:blocked_state_name, blocked_state_name}
+      ]
+      |> Enum.flat_map(fn
+        {_key, nil} -> []
+        {key, value} -> ["  #{key}: #{value}"]
+      end)
+      |> case do
+        [] -> ""
+        lines -> "\n" <> Enum.join(lines, "\n")
+      end
+
     """
     service_name: "Kepler"
     #{server_block}linear:
       api_key: #{api_key}
       client_id: #{client_id}
       client_secret: #{client_secret}
-      webhook_secret: #{webhook_secret}#{webhook_path_line}
+      webhook_secret: #{webhook_secret}#{webhook_path_line}#{state_mapping_lines}
     github:
       bot_name: "Kepler Bot"
       bot_email: "kepler@example.com"

@@ -62,6 +62,9 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
       field(:webhook_secret, :string)
       field(:workspace_id, :string)
       field(:agent_name, :string, default: "Kepler")
+      field(:executing_state_name, :string)
+      field(:review_state_name, :string)
+      field(:blocked_state_name, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -78,7 +81,10 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
           :oauth_scopes,
           :webhook_secret,
           :workspace_id,
-          :agent_name
+          :agent_name,
+          :executing_state_name,
+          :review_state_name,
+          :blocked_state_name
         ],
         empty_values: []
       )

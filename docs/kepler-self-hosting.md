@@ -88,6 +88,11 @@ Other important runtime facts:
   config to `/data/config/kepler.yml` and points `KEPLER_CONFIG_PATH` at it before Kepler boots.
 - GitHub auth is required for every run.
 - Codex must already work non-interactively on the host.
+- Hosted Kepler can optionally update Linear issue states by exact state name when configured:
+  - `linear.executing_state_name`
+  - `linear.review_state_name`
+  - `linear.blocked_state_name`
+  A common mapping is "picked up" -> executing, "PR opened" -> review, and "run failed" -> blocked.
 
 ## Prerequisites
 
@@ -171,6 +176,27 @@ https://kepler.example.com/webhooks/linear
 ```
 
 The route is fixed in Kepler v1.
+
+### Optional hosted issue-state mapping
+
+If you want hosted runs to move Linear issues as work progresses, add these exact state names to
+your deploy config:
+
+```yaml
+linear:
+  executing_state_name: "In Progress 進行中"
+  review_state_name: "In Review 審核中"
+  blocked_state_name: "Blocked 受阻"
+```
+
+Behavior:
+
+- when Kepler starts executing a run, it moves the issue to `executing_state_name`
+- when a run completes and opens a PR, it moves the issue to `review_state_name`
+- when a run fails, it moves the issue to `blocked_state_name`
+
+If a run completes without producing code changes, Kepler now reports that no PR was opened and
+leaves the issue out of review so operators can decide the next step.
 
 ### 3. Install the app into the workspace
 

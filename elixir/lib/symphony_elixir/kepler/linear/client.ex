@@ -83,6 +83,28 @@ defmodule SymphonyElixir.Kepler.Linear.Client do
   }
   """
 
+  @issue_state_lookup_query """
+  query KeplerResolveStateId($issueId: String!, $stateName: String!) {
+    issue(id: $issueId) {
+      team {
+        states(filter: {name: {eq: $stateName}}, first: 1) {
+          nodes {
+            id
+          }
+        }
+      }
+    }
+  }
+  """
+
+  @issue_update_state_mutation """
+  mutation KeplerUpdateIssueState($issueId: String!, $stateId: String!) {
+    issueUpdate(id: $issueId, input: {stateId: $stateId}) {
+      success
+    }
+  }
+  """
+
   @type repository_suggestion :: %{
           repository_full_name: String.t(),
           hostname: String.t() | nil,
@@ -175,6 +197,21 @@ defmodule SymphonyElixir.Kepler.Linear.Client do
     end
   end
 
+  @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_state(issue_id, state_name)
+      when is_binary(issue_id) and is_binary(state_name) do
+    with {:ok, state_id} <- resolve_state_id(issue_id, state_name),
+         {:ok, response} <-
+           graphql(@issue_update_state_mutation, %{issueId: issue_id, stateId: state_id}),
+         true <- get_in(response, ["data", "issueUpdate", "success"]) == true do
+      :ok
+    else
+      false -> {:error, :issue_update_failed}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :issue_update_failed}
+    end
+  end
+
   @spec graphql(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def graphql(query, variables \\ %{}, opts \\ [])
       when is_binary(query) and is_map(variables) and is_list(opts) do
@@ -230,6 +267,18 @@ defmodule SymphonyElixir.Kepler.Linear.Client do
 
   defp endpoint do
     Config.settings!().linear.endpoint
+  end
+
+  defp resolve_state_id(issue_id, state_name) do
+    with {:ok, response} <-
+           graphql(@issue_state_lookup_query, %{issueId: issue_id, stateName: state_name}),
+         state_id when is_binary(state_id) <-
+           get_in(response, ["data", "issue", "team", "states", "nodes", Access.at(0), "id"]) do
+      {:ok, state_id}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :state_not_found}
+    end
   end
 
   defp headers do
