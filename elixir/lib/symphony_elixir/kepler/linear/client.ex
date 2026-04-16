@@ -116,6 +116,17 @@ defmodule SymphonyElixir.Kepler.Linear.Client do
   }
   """
 
+  @comment_update_mutation """
+  mutation KeplerUpdateComment($commentId: String!, $body: String!) {
+    commentUpdate(id: $commentId, input: {body: $body}) {
+      success
+      comment {
+        id
+      }
+    }
+  }
+  """
+
   @type repository_suggestion :: %{
           repository_full_name: String.t(),
           hostname: String.t() | nil,
@@ -223,16 +234,31 @@ defmodule SymphonyElixir.Kepler.Linear.Client do
     end
   end
 
-  @spec create_issue_comment(String.t(), String.t()) :: :ok | {:error, term()}
+  @spec create_issue_comment(String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def create_issue_comment(issue_id, body)
       when is_binary(issue_id) and is_binary(body) do
     with {:ok, response} <- graphql(@comment_create_mutation, %{issueId: issue_id, body: body}),
-         true <- get_in(response, ["data", "commentCreate", "success"]) == true do
-      :ok
+         true <- get_in(response, ["data", "commentCreate", "success"]) == true,
+         comment_id when is_binary(comment_id) and comment_id != "" <-
+           get_in(response, ["data", "commentCreate", "comment", "id"]) do
+      {:ok, comment_id}
     else
       false -> {:error, :comment_create_failed}
       {:error, reason} -> {:error, reason}
       _ -> {:error, :comment_create_failed}
+    end
+  end
+
+  @spec update_issue_comment(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_comment(comment_id, body)
+      when is_binary(comment_id) and is_binary(body) do
+    with {:ok, response} <- graphql(@comment_update_mutation, %{commentId: comment_id, body: body}),
+         true <- get_in(response, ["data", "commentUpdate", "success"]) == true do
+      :ok
+    else
+      false -> {:error, :comment_update_failed}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :comment_update_failed}
     end
   end
 

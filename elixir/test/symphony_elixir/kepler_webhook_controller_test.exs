@@ -40,8 +40,11 @@ defmodule SymphonyElixir.KeplerWebhookControllerTest do
     @spec create_issue_attachment(String.t(), map()) :: :ok
     def create_issue_attachment(_issue_id, _input), do: :ok
 
-    @spec create_issue_comment(String.t(), String.t()) :: :ok
-    def create_issue_comment(_issue_id, _body), do: :ok
+    @spec create_issue_comment(String.t(), String.t()) :: {:ok, String.t()}
+    def create_issue_comment(_issue_id, _body), do: {:ok, "comment-http"}
+
+    @spec update_issue_comment(String.t(), String.t()) :: :ok
+    def update_issue_comment(_comment_id, _body), do: :ok
 
     @spec graphql(String.t(), map(), keyword()) :: {:ok, map()}
     def graphql(_query, _variables, _opts \\ []), do: {:ok, %{}}
@@ -55,6 +58,12 @@ defmodule SymphonyElixir.KeplerWebhookControllerTest do
       {:ok,
        %{
          branch: "kepler/#{run.linear_issue_identifier}",
+         codex_result: %{
+           final_agent_message: "Implemented the requested change and prepared the pull request.",
+           runtime_plan: "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready.",
+           tool_call_count: 1,
+           tool_calls: ["linear_graphql"]
+         },
          github_installation_id: 99,
          pr_url: "https://github.com/example/#{run.repository_id}/pull/1",
          summary: "Run complete for #{run.repository_id}",

@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
 
   @type run_result :: %{
           branch: String.t() | nil,
+          codex_result: map() | nil,
           github_installation_id: integer() | nil,
           pr_url: String.t() | nil,
           summary: String.t(),
@@ -114,7 +115,7 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
       end
 
     case result do
-      {:ok, _app_result} ->
+      {:ok, app_result} ->
         branch = current_branch(workspace_path)
 
         with :ok <- ensure_expected_issue_branch(branch, expected_branch),
@@ -131,9 +132,10 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
           {:ok,
            %{
              branch: branch,
+             codex_result: app_result.result,
              github_installation_id: installation_id(github_client, repository),
              pr_url: pr_url,
-             summary: summary_text(workspace_path, branch, pr_url),
+             summary: summary_text(workspace_path, branch, pr_url, app_result.result),
              workspace_path: workspace_path
            }}
         end
@@ -466,7 +468,7 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     end
   end
 
-  defp summary_text(workspace_path, branch, pr_url) do
+  defp summary_text(workspace_path, branch, pr_url, codex_result) do
     branch_text =
       case branch do
         nil -> "No branch was detected."
@@ -493,7 +495,17 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
           "Workspace status could not be collected."
       end
 
-    [branch_text, pr_text, changed_files]
+    final_message =
+      case codex_result do
+        %{final_agent_message: value} when is_binary(value) and value != "" ->
+          "Final Codex response:\n\n#{value}"
+
+        _ ->
+          nil
+      end
+
+    [branch_text, pr_text, changed_files, final_message]
+    |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n\n")
   end
 

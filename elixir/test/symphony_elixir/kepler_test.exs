@@ -68,10 +68,21 @@ defmodule SymphonyElixir.KeplerTest do
       :ok
     end
 
-    @spec create_issue_comment(String.t(), String.t()) :: :ok
+    @spec create_issue_comment(String.t(), String.t()) :: {:ok, String.t()}
     def create_issue_comment(issue_id, body) do
       if recipient = :persistent_term.get({__MODULE__, :recipient}, nil) do
-        send(recipient, {:issue_comment, issue_id, body})
+        comment_id = "comment-" <> Integer.to_string(System.unique_integer([:positive]))
+        send(recipient, {:issue_comment_create, issue_id, comment_id, body})
+        {:ok, comment_id}
+      else
+        {:ok, "comment-test"}
+      end
+    end
+
+    @spec update_issue_comment(String.t(), String.t()) :: :ok
+    def update_issue_comment(comment_id, body) do
+      if recipient = :persistent_term.get({__MODULE__, :recipient}, nil) do
+        send(recipient, {:issue_comment_update, comment_id, body})
       end
 
       :ok
@@ -85,13 +96,24 @@ defmodule SymphonyElixir.KeplerTest do
     alias SymphonyElixir.Kepler.Run
 
     @spec run(Run.t(), keyword()) :: {:ok, map()}
-    def run(run, _opts \\ []) do
+    def run(run, opts \\ []) do
       if recipient = :persistent_term.get({__MODULE__, :recipient}, nil) do
         send(
           recipient,
           {:runner_run, run.repository_id, run.linear_agent_session_id, run.active_follow_up_prompts}
         )
       end
+
+      on_event = Keyword.get(opts, :on_event, fn _event -> :ok end)
+
+      events =
+        case :persistent_term.get({__MODULE__, :events}, :unset) do
+          :unset -> default_events()
+          nil -> default_events()
+          configured_events -> configured_events
+        end
+
+      Enum.each(events, on_event)
 
       case :persistent_term.get({__MODULE__, :release}, :immediate) do
         :immediate ->
@@ -130,6 +152,26 @@ defmodule SymphonyElixir.KeplerTest do
 
       {:ok, result}
     end
+
+    defp default_events do
+      [
+        %{event: :session_started, details: %{session_id: "fake-session"}},
+        %{
+          event: :notification,
+          payload: %{
+            "method" => "item/agentMessage/delta",
+            "params" => %{
+              "delta" =>
+                "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready."
+            }
+          }
+        },
+        %{
+          event: :tool_call_completed,
+          details: %{payload: %{"params" => %{"tool" => "linear_graphql"}}}
+        }
+      ]
+    end
   end
 
   defmodule FailingStateStore do
@@ -160,6 +202,7 @@ defmodule SymphonyElixir.KeplerTest do
     original_fake_runner_recipient = persistent_get({FakeRunner, :recipient})
     original_fake_runner_release = persistent_get({FakeRunner, :release})
     original_fake_runner_result = persistent_get({FakeRunner, :result})
+    original_fake_runner_events = persistent_get({FakeRunner, :events})
     original_github_token = System.get_env("GITHUB_TOKEN")
 
     RuntimeMode.set(:kepler)
@@ -171,8 +214,15 @@ defmodule SymphonyElixir.KeplerTest do
     persistent_put({FakeLinearClient, :recipient}, self())
     persistent_put({FakeRunner, :recipient}, self())
     persistent_put({FakeRunner, :release}, :immediate)
+    persistent_put({FakeRunner, :events}, nil)
     persistent_put({FakeRunner, :result}, %{
       branch: "kepler/KEP-1",
+      codex_result: %{
+        final_agent_message: "Implemented the requested change and prepared the pull request.",
+        runtime_plan: "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready.",
+        tool_call_count: 1,
+        tool_calls: ["linear_graphql"]
+      },
       github_installation_id: 99,
       pr_url: "https://github.com/example/repo-api/pull/1",
       summary: "Run complete for repo-api",
@@ -214,6 +264,7 @@ defmodule SymphonyElixir.KeplerTest do
       persistent_restore({FakeRunner, :recipient}, original_fake_runner_recipient)
       persistent_restore({FakeRunner, :release}, original_fake_runner_release)
       persistent_restore({FakeRunner, :result}, original_fake_runner_result)
+      persistent_restore({FakeRunner, :events}, original_fake_runner_events)
       restore_env("GITHUB_TOKEN", original_github_token)
 
       File.rm_rf(config_root)
@@ -259,19 +310,22 @@ defmodule SymphonyElixir.KeplerTest do
              })
 
     assert_receive {:issue_state_update, "issue-1", "In Progress"}
-    assert_receive {:issue_comment, "issue-1", started_comment}
-    assert started_comment =~ "## Kepler Run Started"
+    assert_receive {:issue_comment_create, "issue-1", comment_id, started_comment}
+    assert started_comment =~ "## Kepler Worklog"
+    assert started_comment =~ "Status: `executing`"
     assert started_comment =~ "Repository: `example/repo-api`"
-    assert started_comment =~ "Branch: `kepler/KEP-42`"
-    assert started_comment =~ "Plan: inspect the Linear issue context"
+    assert started_comment =~ "Branch: `"
+    assert started_comment =~ "KEP-42`"
+    assert started_comment =~ "Inspect the selected repository"
     assert_receive {:activity, "session-1", %{type: "thought", body: body}}
     assert body =~ "Acknowledged"
     assert_receive {:runner_run, "repo-api", "session-1", []}
     assert_receive {:issue_state_update, "issue-1", "In Review"}
-    assert_receive {:issue_comment, "issue-1", finished_comment}
-    assert finished_comment =~ "## Kepler Run Result"
+    finished_comment = assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `completed`"))
+    assert finished_comment =~ "## Kepler Worklog"
     assert finished_comment =~ "Status: `completed`"
     assert finished_comment =~ "Pull request: https://github.com/example/repo-api/pull/1"
+    assert finished_comment =~ "Implemented the requested change"
     assert_receive {:session_update, "session-1", %{externalUrls: [%{label: "Pull Request", url: pr_url}]}}
     assert pr_url =~ "repo-api"
     assert_receive {:issue_attachment, "issue-1", %{title: "Pull Request", url: ^pr_url}}
@@ -631,6 +685,14 @@ defmodule SymphonyElixir.KeplerTest do
 
     persistent_put({FakeRunner, :result}, %{
       branch: "kepler/KEP-NOOP",
+      codex_result: %{
+        final_agent_message:
+          "I reviewed the issue context but did not produce any code changes or open a pull request.",
+        runtime_plan:
+          "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready.",
+        tool_call_count: 1,
+        tool_calls: ["linear_graphql"]
+      },
       github_installation_id: 99,
       pr_url: nil,
       summary: "Current branch: `kepler/KEP-NOOP`.\n\nNo pull request URL was detected.\n\nWorkspace is clean after execution.",
@@ -650,13 +712,14 @@ defmodule SymphonyElixir.KeplerTest do
              })
 
     assert_receive {:issue_state_update, "issue-noop", "In Progress"}
-    assert_receive {:issue_comment, "issue-noop", started_comment}
-    assert started_comment =~ "## Kepler Run Started"
+    assert_receive {:issue_comment_create, "issue-noop", comment_id, started_comment}
+    assert started_comment =~ "## Kepler Worklog"
     assert_receive {:issue_state_update, "issue-noop", "Blocked"}
-    assert_receive {:issue_comment, "issue-noop", finished_comment}
-    assert finished_comment =~ "## Kepler Run Result"
+    finished_comment = assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `failed`"))
+    assert finished_comment =~ "## Kepler Worklog"
     assert finished_comment =~ "Status: `failed`"
     assert finished_comment =~ "Kepler requires a PR for every ticket"
+    assert finished_comment =~ "Final model response"
     assert_receive {:activity, "session-noop", %{type: "error", body: body}}
     assert body =~ "Kepler requires a PR for every ticket"
     assert body =~ "No pull request URL was detected."
@@ -699,6 +762,59 @@ defmodule SymphonyElixir.KeplerTest do
     assert_receive {:issue_state_update, "issue-blocked", "Blocked"}
     assert_receive {:activity, "session-blocked", %{type: "error", body: error_body}}
     assert error_body =~ "Run failed"
+  end
+
+  test "no-pr runs that explicitly ask for more input are classified separately" do
+    persistent_put(
+      {FakeLinearClient, :issue},
+      %SymphonyElixir.Kepler.Linear.IssueContext{
+        id: "issue-needs-input",
+        identifier: "KEP-INPUT",
+        title: "Need more input",
+        description: "Should ask for clarification instead of silently succeeding",
+        labels: ["api"],
+        team_key: "ENG",
+        project_slug: "kepler"
+      }
+    )
+
+    persistent_put({FakeRunner, :result}, %{
+      branch: "kepler/KEP-INPUT",
+      codex_result: %{
+        final_agent_message:
+          "I need more information about the expected frontend behavior before I can implement this change and open a pull request.",
+        runtime_plan:
+          "Inspect the selected repository, confirm the expected behavior, implement the requested code change, and open a pull request once the diff is ready.",
+        tool_call_count: 0,
+        tool_calls: []
+      },
+      github_installation_id: 99,
+      pr_url: nil,
+      summary: "Current branch: `kepler/KEP-INPUT`.\n\nNo pull request URL was detected.\n\nWorkspace is clean after execution.",
+      workspace_path: "/tmp/repo-api"
+    })
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "created",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-needs-input",
+                   "issue" => %{"id" => "issue-needs-input"}
+                 },
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    assert_receive {:issue_state_update, "issue-needs-input", "In Progress"}
+    assert_receive {:issue_state_update, "issue-needs-input", "Blocked"}
+    assert_receive {:activity, "session-needs-input", %{type: "response", body: body}}
+    assert body =~ "need more information"
+
+    assert_eventually(fn ->
+      snapshot = ControlPlane.snapshot()
+      [%{status: "needs_input"}] = Enum.filter(snapshot.runs, &(&1.linear_issue_id == "issue-needs-input"))
+    end)
   end
 
   test "rejected second sessions get the existing PR backlink when the active run already has one" do
@@ -1016,6 +1132,26 @@ defmodule SymphonyElixir.KeplerTest do
       else
         reraise error, __STACKTRACE__
       end
+  end
+
+  defp assert_receive_comment_update(comment_id, matcher, attempts \\ 5)
+
+  defp assert_receive_comment_update(_comment_id, _matcher, 0) do
+    flunk("did not receive a matching issue comment update")
+  end
+
+  defp assert_receive_comment_update(comment_id, matcher, attempts) do
+    receive do
+      {:issue_comment_update, ^comment_id, body} ->
+        if matcher.(body) do
+          body
+        else
+          assert_receive_comment_update(comment_id, matcher, attempts - 1)
+        end
+    after
+      1_000 ->
+        flunk("did not receive issue comment update for #{inspect(comment_id)}")
+    end
   end
 
   defp persistent_get(key), do: :persistent_term.get(key, :__missing__)

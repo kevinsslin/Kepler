@@ -1066,6 +1066,87 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "app server returns the terminal agent message and tool usage summary" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-terminal-result-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-90C")
+      codex_binary = Path.join(test_root, "fake-codex")
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-90c"}}}'
+            ;;
+          3)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-90c"}}}'
+            printf '%s\\n' '{"method":"item/agentMessage/delta","params":{"delta":"I will inspect the repository, make the requested frontend change, and open a pull request."}}'
+            printf '%s\\n' '{"method":"item/tool/call","id":102,"params":{"tool":"linear_graphql","arguments":{"query":"query Viewer { viewer { id } }"}}}'
+            printf '%s\\n' '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}'
+            exit 0
+            ;;
+          *)
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-terminal-result",
+        identifier: "MT-90C",
+        title: "Terminal result",
+        description: "Capture the final agent response and tool usage",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-90C",
+        labels: ["backend"]
+      }
+
+      tool_executor = fn _tool, _arguments ->
+        %{
+          "success" => true,
+          "contentItems" => [
+            %{
+              "type" => "inputText",
+              "text" => ~s({"data":{"viewer":{"id":"usr_123"}}})
+            }
+          ]
+        }
+      end
+
+      assert {:ok, result} =
+               AppServer.run(workspace, "Capture terminal result", issue, tool_executor: tool_executor)
+
+      assert result.result.status == :turn_completed
+      assert result.result.tool_call_count == 1
+      assert result.result.tool_calls == ["linear_graphql"]
+      assert result.result.final_agent_message =~ "inspect the repository"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "app server buffers partial JSON lines until newline terminator" do
     test_root =
       Path.join(
