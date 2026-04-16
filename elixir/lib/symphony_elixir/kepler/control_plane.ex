@@ -423,6 +423,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       |> persist_state()
 
     maybe_transition_issue_state(execution_run, executing_state_name())
+    maybe_comment_run_started(state, execution_run)
     updated_state
   end
 
@@ -468,6 +469,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         response(completed_response_body(run))
       )
 
+    maybe_comment_run_finished(run)
     maybe_attach_pull_request(run)
     maybe_transition_issue_state_for_completed_run(run)
   end
@@ -479,6 +481,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         error(failed_response_body(run))
       )
 
+    maybe_comment_run_finished(run)
     maybe_transition_issue_state(run, blocked_state_name())
   end
 
@@ -743,6 +746,101 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
   defp maybe_log_pull_request_link_failure(run, target, {:error, reason}) do
     Logger.warning("Failed to link pull request for Kepler run #{run.id} target=#{target}: #{inspect(reason)}")
+  end
+
+  defp maybe_comment_run_started(state, %Run{} = run) do
+    repository = repository_for_run(state, run)
+    reference_repositories = reference_repositories_for(state, repository)
+    branch = "kepler/#{run.linear_issue_identifier || run.linear_issue_id || "unknown"}"
+
+    body =
+      [
+        "## Kepler Run Started",
+        "",
+        "- Status: `executing`",
+        "- Repository: `#{repository_label(repository, run.repository_id)}`",
+        "- Branch: `#{branch}`",
+        "- Reference repos: #{reference_repositories_label(reference_repositories)}",
+        "- Plan: inspect the Linear issue context, implement the requested change in the selected repository, and open a pull request."
+      ]
+      |> Enum.join("\n")
+
+    maybe_create_issue_comment(run, body, :started)
+  end
+
+  defp maybe_comment_run_finished(%Run{} = run) do
+    body =
+      [
+        "## Kepler Run Result",
+        "",
+        "- Status: `#{run.status}`",
+        "- Repository: `#{run.repository_id || "unknown"}`",
+        "- Branch: `#{run.branch || predicted_issue_branch(run)}`",
+        terminal_result_line(run),
+        "",
+        "### Summary",
+        "",
+        run.summary || run.last_error || "No summary was recorded."
+      ]
+      |> Enum.join("\n")
+      |> String.trim()
+
+    maybe_create_issue_comment(run, body, :finished)
+  end
+
+  defp maybe_create_issue_comment(%Run{} = run, body, stage) when is_binary(body) do
+    case linear_client_module().create_issue_comment(run.linear_issue_id, body) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to create Linear issue comment for Kepler run #{run.id} stage=#{stage}: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
+
+  defp terminal_result_line(%Run{pr_url: pr_url}) when is_binary(pr_url) and pr_url != "",
+    do: "- Pull request: #{pr_url}"
+
+  defp terminal_result_line(%Run{last_error: last_error}) when is_binary(last_error) and last_error != "",
+    do: "- Result: #{last_error}"
+
+  defp terminal_result_line(_run),
+    do: "- Result: no pull request was produced."
+
+  defp repository_for_run(state, %Run{repository_id: repository_id}) when is_binary(repository_id) do
+    Enum.find(state.settings.repositories, &(&1.id == repository_id))
+  end
+
+  defp repository_for_run(_state, _run), do: nil
+
+  defp reference_repositories_for(_state, nil), do: []
+
+  defp reference_repositories_for(state, repository) do
+    reference_ids = Map.get(repository, :reference_repository_ids, [])
+
+    Enum.filter(state.settings.repositories, &(&1.id in reference_ids))
+  end
+
+  defp repository_label(nil, fallback) when is_binary(fallback), do: fallback
+  defp repository_label(nil, _fallback), do: "unknown"
+  defp repository_label(repository, _fallback), do: repository.full_name
+
+  defp reference_repositories_label([]), do: "_none_"
+
+  defp reference_repositories_label(repositories) do
+    repositories
+    |> Enum.map_join(", ", fn repository -> "`#{repository.full_name}`" end)
+  end
+
+  defp predicted_issue_branch(%Run{} = run) do
+    run.linear_issue_identifier || run.linear_issue_id || "unknown"
+    |> then(fn issue_token ->
+      if String.starts_with?(issue_token, "kepler/"), do: issue_token, else: "kepler/#{issue_token}"
+    end)
   end
 
   defp maybe_transition_issue_state(_run, nil), do: :ok

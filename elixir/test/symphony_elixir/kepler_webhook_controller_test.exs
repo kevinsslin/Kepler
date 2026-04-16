@@ -40,6 +40,9 @@ defmodule SymphonyElixir.KeplerWebhookControllerTest do
     @spec create_issue_attachment(String.t(), map()) :: :ok
     def create_issue_attachment(_issue_id, _input), do: :ok
 
+    @spec create_issue_comment(String.t(), String.t()) :: :ok
+    def create_issue_comment(_issue_id, _body), do: :ok
+
     @spec graphql(String.t(), map(), keyword()) :: {:ok, map()}
     def graphql(_query, _variables, _opts \\ []), do: {:ok, %{}}
   end

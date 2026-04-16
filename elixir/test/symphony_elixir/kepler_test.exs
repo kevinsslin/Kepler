@@ -68,6 +68,15 @@ defmodule SymphonyElixir.KeplerTest do
       :ok
     end
 
+    @spec create_issue_comment(String.t(), String.t()) :: :ok
+    def create_issue_comment(issue_id, body) do
+      if recipient = :persistent_term.get({__MODULE__, :recipient}, nil) do
+        send(recipient, {:issue_comment, issue_id, body})
+      end
+
+      :ok
+    end
+
     @spec graphql(String.t(), map(), keyword()) :: {:ok, map()}
     def graphql(_query, _variables, _opts \\ []), do: {:ok, %{}}
   end
@@ -250,10 +259,19 @@ defmodule SymphonyElixir.KeplerTest do
              })
 
     assert_receive {:issue_state_update, "issue-1", "In Progress"}
+    assert_receive {:issue_comment, "issue-1", started_comment}
+    assert started_comment =~ "## Kepler Run Started"
+    assert started_comment =~ "Repository: `example/repo-api`"
+    assert started_comment =~ "Branch: `kepler/KEP-42`"
+    assert started_comment =~ "Plan: inspect the Linear issue context"
     assert_receive {:activity, "session-1", %{type: "thought", body: body}}
     assert body =~ "Acknowledged"
     assert_receive {:runner_run, "repo-api", "session-1", []}
     assert_receive {:issue_state_update, "issue-1", "In Review"}
+    assert_receive {:issue_comment, "issue-1", finished_comment}
+    assert finished_comment =~ "## Kepler Run Result"
+    assert finished_comment =~ "Status: `completed`"
+    assert finished_comment =~ "Pull request: https://github.com/example/repo-api/pull/1"
     assert_receive {:session_update, "session-1", %{externalUrls: [%{label: "Pull Request", url: pr_url}]}}
     assert pr_url =~ "repo-api"
     assert_receive {:issue_attachment, "issue-1", %{title: "Pull Request", url: ^pr_url}}
@@ -632,7 +650,13 @@ defmodule SymphonyElixir.KeplerTest do
              })
 
     assert_receive {:issue_state_update, "issue-noop", "In Progress"}
+    assert_receive {:issue_comment, "issue-noop", started_comment}
+    assert started_comment =~ "## Kepler Run Started"
     assert_receive {:issue_state_update, "issue-noop", "Blocked"}
+    assert_receive {:issue_comment, "issue-noop", finished_comment}
+    assert finished_comment =~ "## Kepler Run Result"
+    assert finished_comment =~ "Status: `failed`"
+    assert finished_comment =~ "Kepler requires a PR for every ticket"
     assert_receive {:activity, "session-noop", %{type: "error", body: body}}
     assert body =~ "Kepler requires a PR for every ticket"
     assert body =~ "No pull request URL was detected."
