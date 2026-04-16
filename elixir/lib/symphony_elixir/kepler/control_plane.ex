@@ -458,7 +458,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
         updated_run =
           run
-          |> Run.touch(merge_terminal_attrs(run, final_attrs))
+          |> Run.touch(final_attrs)
 
         updated_state =
           state
@@ -604,44 +604,24 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   defp maybe_clear_summary(attrs, "queued"), do: Map.put(attrs, :summary, nil)
   defp maybe_clear_summary(attrs, _status), do: attrs
 
-  defp merge_terminal_attrs(%Run{} = run, attrs) do
-    attrs
-    |> preserve_existing_attr(:workpad_markdown, run.workpad_markdown)
-    |> preserve_existing_attr(:workpad_hash, run.workpad_hash)
-    |> preserve_existing_attr(:runtime_plan, run.runtime_plan)
-    |> preserve_existing_attr(:tool_calls, run.tool_calls)
-    |> preserve_existing_attr(:tool_call_count, run.tool_call_count)
-    |> preserve_existing_attr(:final_agent_message, run.final_agent_message)
-    |> preserve_existing_attr(:worklog_comment_id, run.worklog_comment_id)
-  end
-
-  defp preserve_existing_attr(attrs, key, existing_value) do
-    case {Map.get(attrs, key), existing_value} do
-      {nil, value} when value not in [nil, [], 0, ""] -> Map.put(attrs, key, value)
-      {[], value} when is_list(value) and value != [] -> Map.put(attrs, key, value)
-      {0, value} when is_integer(value) and value > 0 -> Map.put(attrs, key, value)
-      {"", value} when is_binary(value) and value != "" -> Map.put(attrs, key, value)
-      _ -> attrs
-    end
-  end
-
   defp terminal_result(result) do
-    base_attrs = %{
-      branch: result.branch,
-      final_agent_message: codex_result_field(result, :final_agent_message),
-      github_installation_id: result.github_installation_id,
-      pr_url: result.pr_url,
-      runtime_plan: codex_result_field(result, :runtime_plan),
-      summary: result.summary,
-      tool_call_count: codex_result_field(result, :tool_call_count) || 0,
-      tool_calls: codex_result_field(result, :tool_calls) || [],
-      workpad_hash: Map.get(result, :workpad_hash) || Map.get(result, "workpad_hash"),
-      workpad_markdown: Map.get(result, :workpad_markdown) || Map.get(result, "workpad_markdown"),
-      workspace_path: result.workspace_path
-    }
+    base_attrs =
+      %{
+        branch: result.branch,
+        final_agent_message: codex_result_field(result, :final_agent_message),
+        github_installation_id: result.github_installation_id,
+        pr_url: result.pr_url,
+        summary: result.summary,
+        workspace_path: result.workspace_path
+      }
+      |> put_if_present(:workpad_markdown, Map.get(result, :workpad_markdown) || Map.get(result, "workpad_markdown"))
 
     terminal_status_attrs(classify_terminal_result(result), base_attrs)
   end
+
+  defp put_if_present(attrs, _key, nil), do: attrs
+  defp put_if_present(attrs, _key, ""), do: attrs
+  defp put_if_present(attrs, key, value), do: Map.put(attrs, key, value)
 
   defp terminal_status_attrs({status, last_error}, base_attrs) do
     {Atom.to_string(status), Map.put(base_attrs, :last_error, last_error)}
@@ -869,52 +849,15 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       run.final_agent_message
       |> append_agent_message(agent_message_delta(payload))
 
-    runtime_plan =
-      run.runtime_plan ||
-        derive_runtime_plan(updated_message)
-
-    Run.touch(run, %{
-      final_agent_message: updated_message,
-      runtime_plan: runtime_plan
-    })
-  end
-
-  defp update_run_from_event(%Run{} = run, %{event: :notification, payload: %{"method" => "item/plan/delta"} = payload}) do
-    runtime_plan =
-      run.runtime_plan
-      |> append_agent_message(agent_message_delta(payload))
-      |> normalize_agent_message()
-
-    Run.touch(run, %{runtime_plan: runtime_plan})
-  end
-
-  defp update_run_from_event(%Run{} = run, %{event: :tool_call_completed, details: %{payload: %{"params" => params}}}) do
-    tool_name = tool_parameter(params)
-
-    tool_calls =
-      case tool_name do
-        name when is_binary(name) and name != "" ->
-          if name in run.tool_calls, do: run.tool_calls, else: run.tool_calls ++ [name]
-
-        _ ->
-          run.tool_calls
-      end
-
-    Run.touch(run, %{
-      tool_calls: Enum.take(tool_calls, -10),
-      tool_call_count: run.tool_call_count + 1
-    })
+    Run.touch(run, %{final_agent_message: updated_message})
   end
 
   defp update_run_from_event(
          %Run{} = run,
-         %{event: :workpad_snapshot, details: %{markdown: markdown, hash: hash}}
+         %{event: :workpad_snapshot, details: %{markdown: markdown}}
        )
-       when is_binary(markdown) and markdown != "" and is_binary(hash) and hash != "" do
-    Run.touch(run, %{
-      workpad_hash: hash,
-      workpad_markdown: markdown
-    })
+       when is_binary(markdown) and markdown != "" do
+    Run.touch(run, %{workpad_markdown: markdown})
   end
 
   defp update_run_from_event(%Run{} = run, _message), do: run
@@ -1269,10 +1212,10 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
   defp worklog_refresh_event?(
          %{event: :workpad_snapshot},
-         %Run{workpad_hash: previous_hash},
-         %Run{workpad_hash: current_hash}
+         %Run{workpad_markdown: previous_markdown},
+         %Run{workpad_markdown: current_markdown}
        ) do
-    previous_hash != current_hash and present_worklog_text?(current_hash)
+    previous_markdown != current_markdown and present_worklog_text?(current_markdown)
   end
 
   defp worklog_refresh_event?(_message, _previous_run, _updated_run), do: false
@@ -1308,41 +1251,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   end
 
   defp normalize_agent_message(_value), do: nil
-
-  defp derive_runtime_plan(nil), do: nil
-
-  defp derive_runtime_plan(message) when is_binary(message) do
-    normalized =
-      message
-      |> String.trim()
-      |> String.replace(~r/\s+/, " ")
-
-    cond do
-      normalized == "" ->
-        nil
-
-      String.length(normalized) < 40 ->
-        nil
-
-      not String.contains?(normalized, [".", ":", ";", "\n"]) ->
-        nil
-
-      true ->
-        normalized
-        |> String.split(~r/\n\s*\n/, parts: 2)
-        |> List.first()
-        |> String.trim()
-        |> truncate_runtime_plan()
-    end
-  end
-
-  defp truncate_runtime_plan(plan) when is_binary(plan) do
-    if String.length(plan) > 280 do
-      String.slice(plan, 0, 277) <> "..."
-    else
-      plan
-    end
-  end
 
   defp extract_first_path(payload, paths) when is_map(payload) do
     Enum.find_value(paths, &map_path(payload, &1))

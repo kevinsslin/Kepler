@@ -31,9 +31,6 @@ defmodule SymphonyElixir.Codex.AppServer do
   @type turn_result :: %{
           status: :turn_completed,
           final_agent_message: String.t() | nil,
-          runtime_plan: String.t() | nil,
-          tool_calls: [String.t()],
-          tool_call_count: non_neg_integer(),
           completion: map()
         }
 
@@ -412,7 +409,7 @@ defmodule SymphonyElixir.Codex.AppServer do
       "",
       tool_executor,
       auto_approve_requests,
-      new_turn_state()
+      ""
     )
   end
 
@@ -423,7 +420,7 @@ defmodule SymphonyElixir.Codex.AppServer do
          pending_line,
          tool_executor,
          auto_approve_requests,
-         turn_state
+         final_message_acc
        ) do
     receive do
       {^port, {:data, {:eol, chunk}}} ->
@@ -436,7 +433,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           timeout_ms,
           tool_executor,
           auto_approve_requests,
-          turn_state
+          final_message_acc
         )
 
       {^port, {:data, {:noeol, chunk}}} ->
@@ -447,7 +444,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           pending_line <> to_string(chunk),
           tool_executor,
           auto_approve_requests,
-          turn_state
+          final_message_acc
         )
 
       {^port, {:exit_status, status}} ->
@@ -465,16 +462,20 @@ defmodule SymphonyElixir.Codex.AppServer do
          timeout_ms,
          tool_executor,
          auto_approve_requests,
-         turn_state
+         final_message_acc
        ) do
     payload_string = to_string(data)
 
     case Jason.decode(payload_string) do
       {:ok, %{"method" => "turn/completed"} = payload} ->
-        updated_turn_state = accumulate_turn_state(turn_state, payload)
-
         emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
-        {:ok, finalize_turn_result(updated_turn_state, payload)}
+
+        {:ok,
+         %{
+           status: :turn_completed,
+           final_agent_message: normalize_final_message(final_message_acc),
+           completion: payload
+         }}
 
       {:ok, %{"method" => "turn/failed", "params" => _} = payload} ->
         emit_turn_event(
@@ -502,7 +503,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
       {:ok, %{"method" => method} = payload}
       when is_binary(method) ->
-        updated_turn_state = accumulate_turn_state(turn_state, payload)
+        updated_acc = accumulate_final_message(final_message_acc, payload)
 
         handle_turn_method(
           port,
@@ -514,7 +515,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             timeout_ms: timeout_ms,
             tool_executor: tool_executor,
             auto_approve_requests: auto_approve_requests,
-            turn_state: updated_turn_state
+            final_message_acc: updated_acc
           }
         )
 
@@ -536,7 +537,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           "",
           tool_executor,
           auto_approve_requests,
-          turn_state
+          final_message_acc
         )
 
       {:error, _reason} ->
@@ -561,7 +562,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           "",
           tool_executor,
           auto_approve_requests,
-          turn_state
+          final_message_acc
         )
     end
   end
@@ -579,81 +580,23 @@ defmodule SymphonyElixir.Codex.AppServer do
     )
   end
 
-  defp new_turn_state do
-    %{
-      final_agent_message: "",
-      runtime_plan: "",
-      tool_calls: [],
-      tool_call_count: 0
-    }
-  end
-
-  defp accumulate_turn_state(turn_state, %{"method" => "item/agentMessage/delta"} = payload) do
-    update_turn_text(turn_state, :final_agent_message, payload)
-  end
-
-  defp accumulate_turn_state(turn_state, %{"method" => "item/plan/delta"} = payload) do
-    update_turn_text(turn_state, :runtime_plan, payload)
-  end
-
-  defp accumulate_turn_state(turn_state, %{"method" => "turn/plan/updated"} = payload) do
-    case turn_plan_text(payload) do
-      nil -> turn_state
-      plan_text -> %{turn_state | runtime_plan: append_delta(turn_state.runtime_plan, plan_text)}
-    end
-  end
-
-  defp accumulate_turn_state(turn_state, %{"method" => "item/tool/call", "params" => params}) do
-    tool_name = tool_call_name(params)
-
-    turn_state
-    |> Map.update!(:tool_call_count, &(&1 + 1))
-    |> Map.update!(:tool_calls, fn tool_calls ->
-      if is_binary(tool_name) and tool_name != "" and tool_name not in tool_calls do
-        (tool_calls ++ [tool_name]) |> Enum.take(-10)
-      else
-        tool_calls
-      end
-    end)
-  end
-
-  defp accumulate_turn_state(turn_state, _payload), do: turn_state
-
-  defp update_turn_text(turn_state, key, payload) do
+  defp accumulate_final_message(acc, %{"method" => "item/agentMessage/delta"} = payload) do
     case message_delta_text(payload) do
-      nil ->
-        turn_state
-
-      delta ->
-        Map.update!(turn_state, key, &append_delta(&1, delta))
+      nil -> acc
+      delta -> acc <> delta
     end
   end
 
-  defp append_delta(existing, delta) do
-    [existing, delta]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join("")
-  end
+  defp accumulate_final_message(acc, _payload), do: acc
 
-  defp finalize_turn_result(turn_state, payload) do
-    %{
-      status: :turn_completed,
-      final_agent_message: normalize_turn_text(turn_state.final_agent_message),
-      runtime_plan: normalize_turn_text(turn_state.runtime_plan),
-      tool_calls: turn_state.tool_calls,
-      tool_call_count: turn_state.tool_call_count,
-      completion: payload
-    }
-  end
-
-  defp normalize_turn_text(value) when is_binary(value) do
+  defp normalize_final_message(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil
       trimmed -> trimmed
     end
   end
 
-  defp normalize_turn_text(_value), do: nil
+  defp normalize_final_message(_value), do: nil
 
   defp message_delta_text(payload) do
     payload
@@ -663,30 +606,6 @@ defmodule SymphonyElixir.Codex.AppServer do
       _ -> nil
     end
   end
-
-  defp turn_plan_text(payload) do
-    case extract_first_path(payload, [["params", "plan"], [:params, :plan], ["params", "steps"], [:params, :steps]]) do
-      items when is_list(items) ->
-        items
-        |> Enum.map(&plan_item_text/1)
-        |> Enum.reject(&(&1 in [nil, ""]))
-        |> Enum.join("\n")
-        |> normalize_turn_text()
-
-      _ ->
-        nil
-    end
-  end
-
-  defp plan_item_text(item) when is_binary(item), do: item
-
-  defp plan_item_text(%{"text" => text}) when is_binary(text), do: text
-  defp plan_item_text(%{text: text}) when is_binary(text), do: text
-  defp plan_item_text(%{"description" => text}) when is_binary(text), do: text
-  defp plan_item_text(%{description: text}) when is_binary(text), do: text
-  defp plan_item_text(%{"title" => text}) when is_binary(text), do: text
-  defp plan_item_text(%{title: text}) when is_binary(text), do: text
-  defp plan_item_text(_item), do: nil
 
   defp extract_first_path(payload, paths) when is_map(payload) do
     Enum.find_value(paths, &map_path(payload, &1))
@@ -707,38 +626,12 @@ defmodule SymphonyElixir.Codex.AppServer do
     [
       ["params", "delta"],
       [:params, :delta],
-      ["params", "msg", "delta"],
-      [:params, :msg, :delta],
-      ["params", "textDelta"],
-      [:params, :textDelta],
-      ["params", "msg", "textDelta"],
-      [:params, :msg, :textDelta],
-      ["params", "outputDelta"],
-      [:params, :outputDelta],
-      ["params", "msg", "outputDelta"],
-      [:params, :msg, :outputDelta],
       ["params", "text"],
       [:params, :text],
+      ["params", "msg", "delta"],
+      [:params, :msg, :delta],
       ["params", "msg", "text"],
-      [:params, :msg, :text],
-      ["params", "summaryText"],
-      [:params, :summaryText],
-      ["params", "msg", "summaryText"],
-      [:params, :msg, :summaryText],
-      ["params", "msg", "content"],
-      [:params, :msg, :content],
-      ["params", "msg", "payload", "delta"],
-      [:params, :msg, :payload, :delta],
-      ["params", "msg", "payload", "textDelta"],
-      [:params, :msg, :payload, :textDelta],
-      ["params", "msg", "payload", "outputDelta"],
-      [:params, :msg, :payload, :outputDelta],
-      ["params", "msg", "payload", "text"],
-      [:params, :msg, :payload, :text],
-      ["params", "msg", "payload", "summaryText"],
-      [:params, :msg, :payload, :summaryText],
-      ["params", "msg", "payload", "content"],
-      [:params, :msg, :payload, :content]
+      [:params, :msg, :text]
     ]
   end
 
@@ -752,7 +645,7 @@ defmodule SymphonyElixir.Codex.AppServer do
            timeout_ms: timeout_ms,
            tool_executor: tool_executor,
            auto_approve_requests: auto_approve_requests,
-           turn_state: turn_state
+           final_message_acc: final_message_acc
          }
        ) do
     metadata = metadata_from_message(port, payload)
@@ -785,7 +678,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           "",
           tool_executor,
           auto_approve_requests,
-          turn_state
+          final_message_acc
         )
 
       :approval_required ->
@@ -828,7 +721,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             "",
             tool_executor,
             auto_approve_requests,
-            turn_state
+            final_message_acc
           )
         end
     end

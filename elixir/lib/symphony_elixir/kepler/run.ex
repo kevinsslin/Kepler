@@ -3,8 +3,6 @@ defmodule SymphonyElixir.Kepler.Run do
   Durable run record stored by the Kepler control plane.
   """
 
-  # credo:disable-for-this-file Credo.Check.Warning.StructFieldAmount
-
   @derive Jason.Encoder
 
   @type status :: String.t()
@@ -36,10 +34,6 @@ defmodule SymphonyElixir.Kepler.Run do
           issue_project_slug: String.t() | nil,
           worklog_comment_id: String.t() | nil,
           workpad_markdown: String.t() | nil,
-          workpad_hash: String.t() | nil,
-          runtime_plan: String.t() | nil,
-          tool_calls: [String.t()],
-          tool_call_count: non_neg_integer(),
           final_agent_message: String.t() | nil,
           last_error: String.t() | nil,
           summary: String.t() | nil,
@@ -74,10 +68,6 @@ defmodule SymphonyElixir.Kepler.Run do
     issue_project_slug: nil,
     worklog_comment_id: nil,
     workpad_markdown: nil,
-    workpad_hash: nil,
-    runtime_plan: nil,
-    tool_calls: [],
-    tool_call_count: 0,
     final_agent_message: nil,
     last_error: nil,
     summary: nil,

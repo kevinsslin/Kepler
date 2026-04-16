@@ -1139,8 +1139,6 @@ defmodule SymphonyElixir.AppServerTest do
                AppServer.run(workspace, "Capture terminal result", issue, tool_executor: tool_executor)
 
       assert result.result.status == :turn_completed
-      assert result.result.tool_call_count == 1
-      assert result.result.tool_calls == ["linear_graphql"]
       assert result.result.final_agent_message =~ "inspect the repository"
     after
       File.rm_rf(test_root)

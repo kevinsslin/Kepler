@@ -59,10 +59,7 @@ defmodule SymphonyElixir.KeplerWebhookControllerTest do
        %{
          branch: "kepler/#{run.linear_issue_identifier}",
          codex_result: %{
-           final_agent_message: "Implemented the requested change and prepared the pull request.",
-           runtime_plan: "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready.",
-           tool_call_count: 1,
-           tool_calls: ["linear_graphql"]
+           final_agent_message: "Implemented the requested change and prepared the pull request."
          },
          github_installation_id: 99,
          pr_url: "https://github.com/example/#{run.repository_id}/pull/1",

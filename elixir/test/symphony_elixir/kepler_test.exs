@@ -163,7 +163,6 @@ defmodule SymphonyElixir.KeplerTest do
           github_installation_id: 99,
           pr_url: "https://github.com/example/#{run.repository_id}/pull/1",
           summary: "Run complete for #{run.repository_id}",
-          workpad_hash: "workpad-default-hash",
           workpad_markdown: default_workpad_markdown(),
           workspace_path: "/tmp/#{run.repository_id}"
         })
@@ -176,10 +175,7 @@ defmodule SymphonyElixir.KeplerTest do
         %{event: :session_started, details: %{session_id: "fake-session"}},
         %{
           event: :workpad_snapshot,
-          details: %{
-            hash: "workpad-default-hash",
-            markdown: default_workpad_markdown()
-          }
+          details: %{markdown: default_workpad_markdown()}
         },
         %{
           event: :notification,
@@ -243,10 +239,7 @@ defmodule SymphonyElixir.KeplerTest do
     persistent_put({FakeRunner, :result}, %{
       branch: "kepler/KEP-1",
       codex_result: %{
-        final_agent_message: "Implemented the requested change and prepared the pull request.",
-        runtime_plan: "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready.",
-        tool_call_count: 1,
-        tool_calls: ["linear_graphql"]
+        final_agent_message: "Implemented the requested change and prepared the pull request."
       },
       github_installation_id: 99,
       pr_url: "https://github.com/example/repo-api/pull/1",
@@ -714,10 +707,7 @@ defmodule SymphonyElixir.KeplerTest do
     persistent_put({FakeRunner, :result}, %{
       branch: "kepler/KEP-NOOP",
       codex_result: %{
-        final_agent_message: "I reviewed the issue context but did not produce any code changes or open a pull request.",
-        runtime_plan: "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready.",
-        tool_call_count: 1,
-        tool_calls: ["linear_graphql"]
+        final_agent_message: "I reviewed the issue context but did not produce any code changes or open a pull request."
       },
       github_installation_id: 99,
       pr_url: nil,
@@ -1056,10 +1046,7 @@ defmodule SymphonyElixir.KeplerTest do
     persistent_put({FakeRunner, :result}, %{
       branch: "kepler/KEP-INPUT",
       codex_result: %{
-        final_agent_message: "I need more information about the expected frontend behavior before I can implement this change and open a pull request.",
-        runtime_plan: "Inspect the selected repository, confirm the expected behavior, implement the requested code change, and open a pull request once the diff is ready.",
-        tool_call_count: 0,
-        tool_calls: []
+        final_agent_message: "I need more information about the expected frontend behavior before I can implement this change and open a pull request."
       },
       github_installation_id: 99,
       pr_url: nil,

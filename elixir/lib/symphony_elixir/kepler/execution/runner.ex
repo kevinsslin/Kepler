@@ -22,7 +22,6 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
           github_installation_id: integer() | nil,
           pr_url: String.t() | nil,
           summary: String.t(),
-          workpad_hash: String.t() | nil,
           workpad_markdown: String.t() | nil,
           workspace_path: String.t()
         }
@@ -119,7 +118,7 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     case result do
       {:ok, app_result} ->
         branch = current_branch(workspace_path)
-        {workpad_markdown, workpad_hash} = current_workpad_snapshot(workspace_path)
+        workpad_markdown = current_workpad_snapshot(workspace_path)
 
         with :ok <- ensure_expected_issue_branch(branch, expected_branch),
              :ok <- ensure_clean_workspace(workspace_path),
@@ -139,7 +138,6 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
              github_installation_id: installation_id(github_client, repository),
              pr_url: pr_url,
              summary: summary_text(workspace_path, branch, pr_url, app_result.result),
-             workpad_hash: workpad_hash,
              workpad_markdown: workpad_markdown,
              workspace_path: workspace_path
            }}
@@ -734,27 +732,24 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
   end
 
   defp reset_workpad_snapshot_state(workspace_path) do
-    Process.delete({__MODULE__, :workpad_hash, workspace_path})
+    Process.delete({__MODULE__, :workpad_markdown, workspace_path})
     :ok
   end
 
   defp maybe_emit_workpad_snapshot(workspace_path, on_event) do
     case current_workpad_snapshot(workspace_path) do
-      {nil, nil} ->
+      nil ->
         :ok
 
-      {markdown, hash} ->
-        previous_hash = Process.get({__MODULE__, :workpad_hash, workspace_path})
+      markdown ->
+        previous = Process.get({__MODULE__, :workpad_markdown, workspace_path})
 
-        if hash != previous_hash do
-          Process.put({__MODULE__, :workpad_hash, workspace_path}, hash)
+        if markdown != previous do
+          Process.put({__MODULE__, :workpad_markdown, workspace_path}, markdown)
 
           on_event.(%{
             event: :workpad_snapshot,
-            details: %{
-              hash: hash,
-              markdown: markdown
-            }
+            details: %{markdown: markdown}
           })
         else
           :ok
@@ -765,32 +760,13 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
   defp current_workpad_snapshot(workspace_path) do
     case File.read(workpad_path(workspace_path)) do
       {:ok, markdown} ->
-        normalized =
-          markdown
-          |> String.trim()
-          |> case do
-            "" -> nil
-            trimmed -> trimmed
-          end
-
-        case normalized do
-          nil ->
-            {nil, nil}
-
-          _ ->
-            hash =
-              :sha256
-              |> :crypto.hash(normalized)
-              |> Base.encode16(case: :lower)
-
-            {normalized, hash}
+        case String.trim(markdown) do
+          "" -> nil
+          trimmed -> trimmed
         end
 
-      {:error, :enoent} ->
-        {nil, nil}
-
       {:error, _reason} ->
-        {nil, nil}
+        nil
     end
   end
 
