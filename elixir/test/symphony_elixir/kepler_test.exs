@@ -597,7 +597,7 @@ defmodule SymphonyElixir.KeplerTest do
     assert_receive {:runner_run, "repo-api", "session-terminal-2", []}
   end
 
-  test "completed runs without a pull request explain the no-op outcome and stay out of review" do
+  test "runs without a pull request are treated as blocked and explain the no-op outcome" do
     persistent_put(
       {FakeLinearClient, :issue},
       %SymphonyElixir.Kepler.Linear.IssueContext{
@@ -632,8 +632,9 @@ defmodule SymphonyElixir.KeplerTest do
              })
 
     assert_receive {:issue_state_update, "issue-noop", "In Progress"}
-    assert_receive {:activity, "session-noop", %{type: "response", body: body}}
-    assert body =~ "Run completed without producing code changes"
+    assert_receive {:issue_state_update, "issue-noop", "Blocked"}
+    assert_receive {:activity, "session-noop", %{type: "error", body: body}}
+    assert body =~ "Kepler requires a PR for every ticket"
     assert body =~ "No pull request URL was detected."
     refute_receive {:issue_state_update, "issue-noop", "In Review"}, 200
     refute_receive {:session_update, "session-noop", _input}, 200

@@ -105,16 +105,11 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   end
 
   def handle_info({:run_finished, run_id, {:ok, result}}, state) do
+    {terminal_status, terminal_attrs} = terminal_result(result)
+
     {state, updated_run} =
       state
-      |> finish_run(run_id, "completed", %{
-        branch: result.branch,
-        github_installation_id: result.github_installation_id,
-        pr_url: result.pr_url,
-        summary: result.summary,
-        workspace_path: result.workspace_path,
-        last_error: nil
-      })
+      |> finish_run(run_id, terminal_status, terminal_attrs)
       |> then(fn {updated_state, run} -> {schedule_dispatch(updated_state, 0), run} end)
 
     maybe_emit_terminal_activity(updated_run)
@@ -481,7 +476,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     _ =
       linear_client_module().create_agent_activity(
         run.linear_agent_session_id,
-        error("Run failed: #{run.last_error || "unknown error"}")
+        error(failed_response_body(run))
       )
 
     maybe_transition_issue_state(run, blocked_state_name())
@@ -497,22 +492,54 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
   defp maybe_emit_terminal_activity(_run), do: :ok
 
-  defp completed_response_body(%Run{pr_url: nil, summary: summary}) when is_binary(summary) and summary != "" do
+  defp completed_response_body(%Run{summary: summary}) when is_binary(summary) and summary != "",
+    do: summary
+
+  defp completed_response_body(_run), do: "Run completed."
+
+  defp failed_response_body(%Run{last_error: last_error, summary: summary})
+       when is_binary(last_error) and last_error != "" and is_binary(summary) and summary != "" do
     """
-    Run completed without producing code changes, so no pull request was opened.
+    Run failed: #{last_error}
 
     #{summary}
     """
     |> String.trim()
   end
 
-  defp completed_response_body(%Run{summary: summary}) when is_binary(summary) and summary != "",
+  defp failed_response_body(%Run{last_error: last_error}) when is_binary(last_error) and last_error != "",
+    do: "Run failed: #{last_error}"
+
+  defp failed_response_body(%Run{summary: summary}) when is_binary(summary) and summary != "",
     do: summary
 
-  defp completed_response_body(_run), do: "Run completed."
+  defp failed_response_body(_run), do: "Run failed."
 
   defp maybe_clear_summary(attrs, "queued"), do: Map.put(attrs, :summary, nil)
   defp maybe_clear_summary(attrs, _status), do: attrs
+
+  defp terminal_result(result) do
+    base_attrs = %{
+      branch: result.branch,
+      github_installation_id: result.github_installation_id,
+      pr_url: result.pr_url,
+      summary: result.summary,
+      workspace_path: result.workspace_path
+    }
+
+    case result.pr_url do
+      value when is_binary(value) and value != "" ->
+        {"completed", Map.put(base_attrs, :last_error, nil)}
+
+      _ ->
+        {"failed",
+         Map.put(
+           base_attrs,
+           :last_error,
+           "Run finished without opening a pull request. Kepler requires a PR for every ticket unless it explicitly asks for more input or repository clarification."
+         )}
+    end
+  end
 
   defp handle_run_down(state, task_refs, run_id, reason) do
     run = Map.get(state.runs, run_id)
