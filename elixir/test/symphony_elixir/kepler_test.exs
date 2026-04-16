@@ -764,6 +764,154 @@ defmodule SymphonyElixir.KeplerTest do
     assert error_body =~ "Run failed"
   end
 
+  test "worklog comments are not streamed on every runtime delta" do
+    release_ref = make_ref()
+
+    persistent_put(
+      {FakeLinearClient, :issue},
+      %SymphonyElixir.Kepler.Linear.IssueContext{
+        id: "issue-worklog-stream",
+        identifier: "KEP-STREAM",
+        title: "Throttle worklog updates",
+        description: "Do not stream every delta into Linear comments",
+        labels: ["api"],
+        team_key: "ENG",
+        project_slug: "kepler"
+      }
+    )
+
+    persistent_put({FakeRunner, :release}, {:block_once, self(), release_ref})
+
+    persistent_put({FakeRunner, :events}, [
+      %{event: :session_started, details: %{session_id: "fake-session"}},
+      %{
+        event: :notification,
+        payload: %{
+          "method" => "item/agentMessage/delta",
+          "params" => %{"delta" => "Inspect the selected repository, make the requested code change,"}
+        }
+      },
+      %{
+        event: :notification,
+        payload: %{
+          "method" => "item/agentMessage/delta",
+          "params" => %{"delta" => " and open a pull request once the diff is ready."}
+        }
+      },
+      %{
+        event: :notification,
+        payload: %{
+          "method" => "item/agentMessage/delta",
+          "params" => %{"delta" => " This extra delta should not trigger another comment update."}
+        }
+      },
+      %{
+        event: :tool_call_completed,
+        details: %{payload: %{"params" => %{"tool" => "linear_graphql"}}}
+      },
+      %{
+        event: :notification,
+        payload: %{
+          "method" => "item/agentMessage/delta",
+          "params" => %{"delta" => " Final streamed text before the turn completes."}
+        }
+      }
+    ])
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "created",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-worklog-stream",
+                   "issue" => %{"id" => "issue-worklog-stream"}
+                 },
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    assert_receive {:issue_comment_create, "issue-worklog-stream", comment_id, started_comment}
+    assert started_comment =~ "## Kepler Worklog"
+    assert started_comment =~ "Status: `executing`"
+    refute_receive {:issue_comment_update, ^comment_id, _body}, 200
+
+    assert_receive {:runner_waiting, "session-worklog-stream", ^release_ref, runner_pid}
+    send(runner_pid, {:release_runner, release_ref})
+
+    finished_comment = assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `completed`"))
+    assert finished_comment =~ "## Kepler Worklog"
+    assert finished_comment =~ "Status: `completed`"
+  end
+
+  test "reuses the latest worklog comment for reruns on the same issue" do
+    existing_run =
+      Run.new(%{
+        id: "run-existing-worklog",
+        linear_issue_id: "issue-worklog-reuse",
+        linear_issue_identifier: "KEP-REUSE",
+        linear_issue_title: "Reuse worklog comment",
+        linear_issue_url: "https://linear.app/example/issue/KEP-REUSE",
+        linear_agent_session_id: "session-existing-worklog",
+        repository_id: "repo-api",
+        status: "completed",
+        branch: "kepler/KEP-REUSE",
+        pr_url: "https://github.com/example/repo-api/pull/7",
+        worklog_comment_id: "comment-existing-worklog"
+      })
+
+    :sys.replace_state(ControlPlane, fn state ->
+      %{
+        state
+        | runs: %{existing_run.id => existing_run},
+          queued_run_ids: [],
+          active_run_ids: [],
+          task_refs: %{}
+      }
+    end)
+
+    persistent_put(
+      {FakeLinearClient, :issue},
+      %SymphonyElixir.Kepler.Linear.IssueContext{
+        id: "issue-worklog-reuse",
+        identifier: "KEP-REUSE",
+        title: "Reuse worklog comment",
+        description: "Reruns should update the same comment instead of creating a new one",
+        labels: ["api"],
+        team_key: "ENG",
+        project_slug: "kepler"
+      }
+    )
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "created",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-worklog-reuse",
+                   "issue" => %{"id" => "issue-worklog-reuse"}
+                 },
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    started_comment =
+      assert_receive_comment_update(
+        "comment-existing-worklog",
+        &String.contains?(&1, "Status: `executing`")
+      )
+
+    assert started_comment =~ "## Kepler Worklog"
+    refute_receive {:issue_comment_create, "issue-worklog-reuse", _, _}, 200
+
+    finished_comment =
+      assert_receive_comment_update(
+        "comment-existing-worklog",
+        &String.contains?(&1, "Status: `completed`")
+      )
+
+    assert finished_comment =~ "Pull request: https://github.com/example/repo-api/pull/1"
+  end
+
   test "no-pr runs that explicitly ask for more input are classified separately" do
     persistent_put(
       {FakeLinearClient, :issue},

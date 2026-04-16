@@ -24,6 +24,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       :settings,
       :dispatch_timer_ref,
       runs: %{},
+      issue_worklog_comment_ids: %{},
       queued_run_ids: [],
       active_run_ids: [],
       task_refs: %{}
@@ -216,7 +217,8 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
             issue_labels: issue.labels,
             issue_team_key: issue.team_key,
             issue_project_id: issue.project_id,
-            issue_project_slug: issue.project_slug
+            issue_project_slug: issue.project_slug,
+            worklog_comment_id: worklog_comment_id_for_issue(state, issue.id)
           })
 
         updated_state =
@@ -259,7 +261,8 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
             issue_labels: issue.labels,
             issue_team_key: issue.team_key,
             issue_project_id: issue.project_id,
-            issue_project_slug: issue.project_slug
+            issue_project_slug: issue.project_slug,
+            worklog_comment_id: worklog_comment_id_for_issue(state, issue.id)
           })
 
         updated_state =
@@ -759,6 +762,48 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
   defp conflicting_issue_run(_state, _issue_id, _agent_session_id), do: nil
 
+  defp worklog_comment_id_for_issue(state, issue_id) when is_binary(issue_id) and issue_id != "" do
+    Map.get(state.issue_worklog_comment_ids, issue_id) ||
+      latest_worklog_comment_id_for_issue(state, issue_id)
+  end
+
+  defp worklog_comment_id_for_issue(_state, _issue_id), do: nil
+
+  defp latest_worklog_comment_id_for_issue(state, issue_id) when is_binary(issue_id) and issue_id != "" do
+    state.runs
+    |> Map.values()
+    |> Enum.filter(fn run ->
+      run.linear_issue_id == issue_id and is_binary(run.worklog_comment_id) and run.worklog_comment_id != ""
+    end)
+    |> Enum.max_by(&{&1.updated_at || "", &1.created_at || "", &1.id}, fn -> nil end)
+    |> case do
+      %Run{worklog_comment_id: comment_id} -> comment_id
+      _ -> nil
+    end
+  end
+
+  defp latest_worklog_comment_id_for_issue(_state, _issue_id), do: nil
+
+  defp attach_worklog_comment_reference(state, %Run{} = run) do
+    case {run.worklog_comment_id, worklog_comment_id_for_issue(state, run.linear_issue_id)} do
+      {comment_id, _} when is_binary(comment_id) and comment_id != "" ->
+        run
+
+      {_, comment_id} when is_binary(comment_id) and comment_id != "" ->
+        Run.touch(run, %{worklog_comment_id: comment_id})
+
+      _ ->
+        run
+    end
+  end
+
+  defp put_issue_worklog_comment_id(state, issue_id, comment_id)
+       when is_binary(issue_id) and issue_id != "" and is_binary(comment_id) and comment_id != "" do
+    %{state | issue_worklog_comment_ids: Map.put(state.issue_worklog_comment_ids, issue_id, comment_id)}
+  end
+
+  defp put_issue_worklog_comment_id(state, _issue_id, _comment_id), do: state
+
   defp maybe_create_run_from_issue(state, event, issue, linear_client) do
     case conflicting_issue_run(state, issue.id, event.agent_session_id) do
       nil ->
@@ -799,7 +844,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     case Map.get(state.runs, run_id) do
       %Run{} = run ->
         updated_run = update_run_from_event(run, message)
-        refresh_worklog? = updated_run != run and worklog_refresh_event?(message, updated_run)
+        refresh_worklog? = updated_run != run and worklog_refresh_event?(message, run, updated_run)
 
         next_state =
           if updated_run == run do
@@ -984,6 +1029,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   defp maybe_sync_worklog_comment(state, %Run{} = run, opts) do
     force? = Keyword.get(opts, :force, false)
     refresh? = Keyword.get(opts, :refresh, false)
+    run = attach_worklog_comment_reference(state, run)
 
     cond do
       run.worklog_comment_id && (force? || refresh?) ->
@@ -1001,13 +1047,20 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
             {state, run}
         end
 
-      should_create_worklog_comment?(run, force?) ->
+      blank_worklog_text?(run.worklog_comment_id) and should_create_worklog_comment?(run, force?) ->
         body = worklog_comment_body(state, run)
 
         case linear_client_module().create_issue_comment(run.linear_issue_id, body) do
           {:ok, comment_id} ->
             updated_run = Run.touch(run, %{worklog_comment_id: comment_id})
-            {put_run(state, updated_run), updated_run}
+
+            updated_state =
+              state
+              |> put_run(updated_run)
+              |> put_issue_worklog_comment_id(run.linear_issue_id, comment_id)
+              |> persist_state()
+
+            {updated_state, updated_run}
 
           {:error, reason} ->
             Logger.warning(
@@ -1164,14 +1217,20 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     |> Enum.map_join(", ", fn repository -> "`#{repository.full_name}`" end)
   end
 
-  defp worklog_refresh_event?(%{event: :tool_call_completed}, _run), do: true
-
-  defp worklog_refresh_event?(%{event: :notification, payload: %{"method" => "item/agentMessage/delta"}}, %Run{runtime_plan: runtime_plan})
-       when is_binary(runtime_plan) and runtime_plan != "" do
-    true
+  defp worklog_refresh_event?(
+         %{event: :notification, payload: %{"method" => "item/agentMessage/delta"}},
+         %Run{runtime_plan: previous_plan},
+         %Run{runtime_plan: current_plan}
+       ) do
+    blank_worklog_text?(previous_plan) and present_worklog_text?(current_plan)
   end
 
-  defp worklog_refresh_event?(_message, _run), do: false
+  defp worklog_refresh_event?(_message, _previous_run, _updated_run), do: false
+
+  defp blank_worklog_text?(value), do: not present_worklog_text?(value)
+
+  defp present_worklog_text?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_worklog_text?(_value), do: false
 
   defp agent_message_delta(%{"params" => _} = payload) do
     payload
@@ -1392,6 +1451,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         %State{
           settings: settings,
           runs: StateStore.decode_runs(payload),
+          issue_worklog_comment_ids: Map.get(payload, "issue_worklog_comment_ids", %{}),
           queued_run_ids: Map.get(payload, "queued_run_ids", []),
           active_run_ids: Map.get(payload, "active_run_ids", []),
           task_refs: %{}
@@ -1491,6 +1551,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
     payload = %{
       "runs" => StateStore.encode_runs(state_to_persist.runs),
+      "issue_worklog_comment_ids" => state_to_persist.issue_worklog_comment_ids,
       "queued_run_ids" => state_to_persist.queued_run_ids,
       "active_run_ids" => state_to_persist.active_run_ids
     }
