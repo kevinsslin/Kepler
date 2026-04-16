@@ -171,6 +171,27 @@ defmodule SymphonyElixir.KeplerWebhookControllerTest do
     assert [%{linear_agent_session_id: "session-http-1"}] = snapshot.runs
   end
 
+  test "accepts top-level agentSession payloads emitted by Linear app events" do
+    start_supervised!(ControlPlane)
+
+    payload = %{
+      "action" => "created",
+      "agentSession" => %{
+        "id" => "session-http-top-level",
+        "issue" => %{"id" => "issue-http-top-level"},
+        "promptContext" => "Review webhook intake."
+      },
+      "webhookTimestamp" => System.system_time(:millisecond)
+    }
+
+    conn = post_signed_webhook(payload)
+
+    assert response(conn, 200) == ""
+
+    snapshot = ControlPlane.snapshot()
+    assert Enum.any?(snapshot.runs, &(&1.linear_agent_session_id == "session-http-top-level"))
+  end
+
   test "returns 503 when the control plane is unavailable" do
     payload = %{
       "action" => "created",
