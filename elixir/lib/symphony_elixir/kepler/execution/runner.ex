@@ -36,6 +36,8 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
 
     with {:ok, github_env} <- github_env(github_client, repository),
          {:ok, created?} <- ensure_repository_workspace(workspace_path, repository, github_env),
+         :ok <- ensure_local_operational_paths_ignored(workspace_path),
+         :ok <- ensure_reference_workspaces(workspace_path, repository, github_env),
          :ok <- ensure_issue_branch(workspace_path, expected_branch, repository.default_branch, github_env),
          {:ok, resolved_workflow} <- WorkflowResolver.load(workspace_path, repository) do
       do_run(%{
@@ -71,6 +73,9 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
        }) do
     result =
       try do
+        issue = issue_struct(run, expected_branch)
+        prompt = prompt(run, resolved_workflow.workflow, issue, repository)
+
         with :ok <-
                maybe_run_after_create_hook(
                  created?,
@@ -89,9 +94,9 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
                ) do
           run_codex(
             workspace_path,
-            run,
-            expected_branch,
-            resolved_workflow,
+            issue,
+            prompt,
+            resolved_workflow.settings,
             github_env,
             linear_client,
             app_server_module,
@@ -138,24 +143,12 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     end
   end
 
-  defp run_codex(
-         workspace_path,
-         run,
-         expected_branch,
-         resolved_workflow,
-         github_env,
-         linear_client,
-         app_server_module,
-         on_event
-       ) do
-    issue = issue_struct(run, expected_branch)
-    prompt = prompt(run, resolved_workflow.workflow, issue)
-
+  defp run_codex(workspace_path, issue, prompt, settings, github_env, linear_client, app_server_module, on_event) do
     app_server_module.run(
       workspace_path,
       prompt,
       issue,
-      settings: resolved_workflow.settings,
+      settings: settings,
       env: github_env,
       on_message: fn message ->
         _ = on_event.(message)
@@ -184,7 +177,7 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     )
   end
 
-  defp prompt(run, workflow, %Issue{} = issue) do
+  defp prompt(run, workflow, %Issue{} = issue, repository) do
     base_prompt =
       PromptBuilder.build_prompt(
         issue,
@@ -198,7 +191,8 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     [
       base_prompt,
       format_prompt_context(run.prompt_context),
-      format_follow_up_prompts(active_follow_up_prompts(run))
+      format_follow_up_prompts(active_follow_up_prompts(run)),
+      format_reference_repositories(repository)
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n\n")
@@ -253,6 +247,27 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     }
   end
 
+  defp format_reference_repositories(repository) do
+    reference_paths =
+      repository
+      |> reference_repositories()
+      |> Enum.map_join("\n", fn reference_repository ->
+        "- `#{reference_repository.id}` at `.kepler/refs/#{reference_repository.id}`"
+      end)
+
+    if reference_paths == "" do
+      nil
+    else
+      """
+      Read-only reference repositories are available for context:
+
+      #{reference_paths}
+
+      Treat these directories as read-only context only. All code changes, commits, and PR updates must stay inside the primary repository workspace.
+      """
+    end
+  end
+
   defp ensure_repository_workspace(workspace_path, repository, env) do
     if File.dir?(Path.join(workspace_path, ".git")) do
       with :ok <- git(workspace_path, ["remote", "set-url", "origin", clone_url(repository)], env),
@@ -271,6 +286,115 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
            :ok <- git(workspace_path, ["checkout", repository.default_branch], env) do
         {:ok, true}
       end
+    end
+  end
+
+  defp ensure_reference_workspaces(workspace_path, repository, env) do
+    references = reference_repositories(repository)
+
+    case references do
+      [] ->
+        :ok
+
+      _ ->
+        sync_reference_repositories(workspace_path, references, env)
+    end
+  end
+
+  defp sync_reference_repositories(workspace_path, references, env) do
+    Enum.reduce_while(references, :ok, fn reference_repository, :ok ->
+      case ensure_reference_workspace(workspace_path, reference_repository, env) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp ensure_reference_workspace(workspace_path, repository, env) do
+    reference_path = reference_workspace_path(workspace_path, repository.id)
+
+    with :ok <- set_reference_workspace_writable(reference_path),
+         {:ok, _created?} <- sync_repository_workspace(reference_path, repository, env),
+         :ok <- set_reference_workspace_read_only(reference_path) do
+      :ok
+    else
+      {:error, reason} ->
+        {:error, {:reference_repository_sync_failed, repository.id, reason}}
+    end
+  end
+
+  defp sync_repository_workspace(workspace_path, repository, env) do
+    if File.dir?(Path.join(workspace_path, ".git")) do
+      with :ok <- git(workspace_path, ["remote", "set-url", "origin", clone_url(repository)], env),
+           :ok <- git(workspace_path, ["fetch", "origin", repository.default_branch, "--prune"], env),
+           :ok <- git(workspace_path, ["checkout", repository.default_branch], env),
+           :ok <- git(workspace_path, ["reset", "--hard", "origin/#{repository.default_branch}"], env) do
+        {:ok, false}
+      end
+    else
+      parent = Path.dirname(workspace_path)
+      File.rm_rf!(workspace_path)
+      File.mkdir_p!(parent)
+      File.mkdir_p!(workspace_path)
+
+      with :ok <- git(workspace_path, ["clone", clone_url(repository), "."], env),
+           :ok <- git(workspace_path, ["checkout", repository.default_branch], env) do
+        {:ok, true}
+      end
+    end
+  end
+
+  defp ensure_local_operational_paths_ignored(workspace_path) do
+    exclude_path = Path.join([workspace_path, ".git", "info", "exclude"])
+    File.mkdir_p!(Path.dirname(exclude_path))
+
+    patterns = [
+      ".kepler/workpad.md",
+      ".kepler/pr-report.json",
+      ".kepler/pr_report.json",
+      ".kepler/refs/"
+    ]
+
+    existing =
+      case File.read(exclude_path) do
+        {:ok, content} -> content
+        {:error, :enoent} -> ""
+        {:error, reason} -> raise File.Error, reason: reason, action: "read", path: exclude_path
+      end
+
+    missing_patterns = Enum.reject(patterns, &String.contains?(existing, &1))
+
+    case missing_patterns do
+      [] ->
+        :ok
+
+      _ ->
+        suffix = if existing == "" or String.ends_with?(existing, "\n"), do: "", else: "\n"
+        additions = Enum.join(missing_patterns, "\n")
+        File.write!(exclude_path, existing <> suffix <> additions <> "\n")
+        :ok
+    end
+  end
+
+  defp set_reference_workspace_writable(path) do
+    chmod_recursive(path, "u+w")
+  end
+
+  defp set_reference_workspace_read_only(path) do
+    chmod_recursive(path, "a-w")
+  end
+
+  defp chmod_recursive(path, mode) do
+    if File.exists?(path) do
+      case System.cmd("chmod", ["-R", mode, path], stderr_to_stdout: true) do
+        {_output, 0} ->
+          :ok
+
+        {output, status} ->
+          {:error, {:chmod_failed, path, mode, status, output}}
+      end
+    else
+      :ok
     end
   end
 
@@ -581,6 +705,10 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     Path.join([Config.settings!().workspace.root, repository.id, issue_token])
   end
 
+  defp reference_workspace_path(workspace_path, repository_id) do
+    Path.join([workspace_path, ".kepler", "refs", repository_id])
+  end
+
   defp clone_url(repository) do
     case repository.clone_url do
       <<"http", _::binary>> = url -> url
@@ -594,6 +722,14 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
       nil -> raise ArgumentError, "Unknown Kepler repository: #{inspect(repository_id)}"
       repository -> repository
     end
+  end
+
+  defp reference_repositories(repository) do
+    by_id = Map.new(Config.settings!().repositories, &{&1.id, &1})
+
+    repository.reference_repository_ids
+    |> List.wrap()
+    |> Enum.map(&Map.fetch!(by_id, &1))
   end
 
   defp github_client do

@@ -74,6 +74,9 @@ repositories:
   # if labels OR team_keys OR project_ids OR project_slugs match, that repo becomes a candidate.
   # The safest pattern is one unique repo:* label per repository.
   # Only add team/project selectors if they stay non-overlapping.
+  # If a repo needs upstream/downstream implementation context, use
+  # reference_repository_ids for read-only sibling checkouts. Kepler still
+  # writes changes only in the selected primary repo.
   - id: "api"
     full_name: "your-org/your-api-repo"
     # Prefer HTTPS GitHub clone URLs in v1.
@@ -92,6 +95,7 @@ repositories:
     provider: "codex"
     github_installation_id: 123456
     labels: ["repo:web"]
+    reference_repository_ids: ["api"]
 
   # Optional secondary selector example, only if it stays unique:
   # - id: "mobile"

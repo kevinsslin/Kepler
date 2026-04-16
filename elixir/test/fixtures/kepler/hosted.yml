@@ -39,6 +39,7 @@ repositories:
     workflow_path: "WORKFLOW.md"
     provider: "codex"
     labels: ["repo:web"]
+    reference_repository_ids: ["api"]
 
   - id: "worker"
     full_name: "example-org/example-worker"
@@ -47,6 +48,7 @@ repositories:
     workflow_path: "WORKFLOW.md"
     provider: "codex"
     labels: ["repo:worker"]
+    reference_repository_ids: ["api", "events"]
 
   - id: "docs"
     full_name: "example-org/example-docs"

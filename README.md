@@ -42,7 +42,8 @@ flowchart LR
 - Single process, single node.
 - One Linear workspace per deployment.
 - Repository access is allowlist-based through `kepler.yml`.
-- One run routes to one repository.
+- One run routes to one writable repository.
+- A repository may expose additional read-only reference repositories for cross-repo context.
 - Recovery reuses the workspace path but reboots from a clean checkout of the configured default
   branch.
 - The recommended Linear runtime auth path is OAuth `client_credentials`; `LINEAR_API_KEY` remains
@@ -54,7 +55,7 @@ flowchart LR
 2. Decide your deployment shape:
    - standard hosted path: use the root [Dockerfile](/Users/kevinslin/repos/kevin-harness-engineering/symphony/Dockerfile) and [railway.toml](/Users/kevinslin/repos/kevin-harness-engineering/symphony/railway.toml)
    - local/manual path: run from [elixir](elixir) with `mix build` and `./scripts/run-kepler.sh`
-3. Start from the committed generic config at [elixir/kepler.yml](elixir/kepler.yml), or point `KEPLER_CONFIG_PATH` at your own deployment config.
+3. Start from the committed generic config at [elixir/kepler.yml](elixir/kepler.yml), point `KEPLER_CONFIG_PATH` at your own deployment config, or inject a private config through `KEPLER_CONFIG_YAML_BASE64` in container deployments.
 4. Configure:
    - a Linear OAuth app with `actor=app`
    - `client_credentials`
@@ -82,6 +83,10 @@ Kepler only routes among repositories pre-registered in `kepler.yml`; it does no
 repo URLs from issue text. The most stable v1 pattern is one shared Linear project plus one unique
 `repo:*` label per repository, with one implementation issue mapped to one repo. Full routing
 guidance lives in [docs/kepler-self-hosting.md](docs/kepler-self-hosting.md).
+
+If a repo needs upstream or downstream implementation context, register those as
+`reference_repository_ids`. Kepler will sync them under `.kepler/refs/<repo-id>/` as read-only
+context while keeping writes and PR publication limited to the selected primary repo.
 
 ## Workflow Model
 

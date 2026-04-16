@@ -127,6 +127,7 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
 
     assert workflow.prompt =~ ".kepler/workpad.md"
     assert workflow.prompt =~ ".kepler/pr-report.json"
+    assert workflow.prompt =~ ".kepler/refs/"
     assert workflow.prompt =~ "kepler/{{ issue.identifier }}"
     assert workflow.prompt =~ "origin/<issue-branch>"
     assert workflow.prompt =~ "\"change_type\": \"frontend\""
@@ -148,7 +149,8 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
       labels: [],
       team_keys: [],
       project_ids: [],
-      project_slugs: []
+      project_slugs: [],
+      reference_repository_ids: []
     }
   end
 

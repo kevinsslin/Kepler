@@ -167,7 +167,7 @@ Shipped deployment files:
 
 The default container behavior is:
 
-1. use `elixir/kepler.yml` unless `KEPLER_CONFIG_PATH` overrides it
+1. use `elixir/kepler.yml` unless `KEPLER_CONFIG_PATH` overrides it, or materialize a private runtime config from `KEPLER_CONFIG_YAML_BASE64` / `KEPLER_CONFIG_YAML`
 2. create `/data/home`, `/data/workspaces`, and `/data/state`
 3. decode `GITHUB_APP_PRIVATE_KEY_BASE64` into `GITHUB_APP_PRIVATE_KEY` when needed
 4. authenticate `codex` non-interactively from `OPENAI_API_KEY` when no cached login exists
@@ -192,6 +192,14 @@ Required Railway secrets for the bundled config:
 - either:
   - `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_BASE64`
   - or `GITHUB_TOKEN` as a fallback
+
+If you do not want to commit a deployment-specific `kepler.yml`, add one of:
+
+- `KEPLER_CONFIG_YAML_BASE64`
+- `KEPLER_CONFIG_YAML`
+
+The shipped container entrypoint will write that private config to `/data/config/kepler.yml`
+at startup and point `KEPLER_CONFIG_PATH` at it automatically.
 
 Optional but recommended:
 
@@ -353,7 +361,10 @@ deliberately minimal and only reports `{mode, ok}`.
 - Single process, single node.
 - Do not run multiple replicas behind the same Linear webhook.
 - Concurrency is serialized per Linear agent session, not per Linear issue.
-- One run targets one repository.
+- One run targets one writable repository.
+- `reference_repository_ids` may add read-only sibling checkouts under `.kepler/refs/<repo-id>/`
+  for cross-repo context, but Kepler still commits and opens PRs only from the selected primary
+  repo.
 - `kepler.yml` reads process environment variables only; it does not parse dotenv files on its own.
 
 ## Legacy Symphony Local Mode

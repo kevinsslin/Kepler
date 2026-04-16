@@ -83,6 +83,9 @@ Other important runtime facts:
 - `kepler.yml` reads process environment variables only. It does not parse dotenv files by itself,
   so use your process manager's env-file support or source a file such as `.env.kepler` before
   launch.
+- For Docker/Railway, you can avoid committing a deployment-specific `kepler.yml` by setting
+  `KEPLER_CONFIG_YAML_BASE64` or `KEPLER_CONFIG_YAML`; the shipped entrypoint writes that private
+  config to `/data/config/kepler.yml` and points `KEPLER_CONFIG_PATH` at it before Kepler boots.
 - GitHub auth is required for every run.
 - Codex must already work non-interactively on the host.
 
@@ -226,6 +229,8 @@ already available on the host to:
 
 - clone that repository if the workspace does not exist yet
 - synchronize the existing checkout to the configured default branch
+- optionally synchronize read-only `reference_repository_ids` into `.kepler/refs/<repo-id>/` for
+  code-reading context
 - let Codex make changes in that workspace
 - push a branch
 - open a PR
@@ -369,6 +374,7 @@ repositories:
     labels: ["web", "frontend"]
     team_keys: ["ENG"]
     project_slugs: ["customer-web"]
+    reference_repository_ids: ["api"]
 ```
 
 In that example:
@@ -376,6 +382,7 @@ In that example:
 - an issue in project `platform-api` routes to `api`
 - an issue in project `customer-web` routes to `web`
 - an issue with label `frontend` routes to `web`
+- when `web` is selected, `api` is also available read-only at `.kepler/refs/api/`
 - an issue that matches both repos stays ambiguous and Kepler asks the user
 
 ### Linear repository suggestions

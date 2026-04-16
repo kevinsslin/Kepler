@@ -44,12 +44,17 @@ defmodule SymphonyElixir.KeplerRunnerTest do
 
   defmodule FakeAppServer do
     @spec run(Path.t(), String.t(), map(), keyword()) :: {:ok, map()}
-    def run(workspace_path, _prompt, issue, _opts \\ []) do
+    def run(workspace_path, prompt, issue, _opts \\ []) do
       current_branch = current_branch(workspace_path)
       notify({:app_server_started_on_branch, current_branch, issue.branch_name})
+      notify({:app_server_prompt, prompt})
 
       case :persistent_term.get({__MODULE__, :scenario}, :push_commit) do
         :push_commit ->
+          commit_change(workspace_path, issue.branch_name, push?: true)
+
+        :push_commit_with_reference_context ->
+          assert_reference_repo_present!(workspace_path)
           commit_change(workspace_path, issue.branch_name, push?: true)
 
         :commit_without_push ->
@@ -69,8 +74,10 @@ defmodule SymphonyElixir.KeplerRunnerTest do
     defp commit_change(workspace_path, branch, opts) do
       change_path = Path.join(workspace_path, "lib-change.txt")
       report_path = Path.join(workspace_path, ".kepler/pr-report.json")
+      workpad_path = Path.join(workspace_path, ".kepler/workpad.md")
       File.mkdir_p!(Path.dirname(report_path))
       File.write!(change_path, "updated at #{System.unique_integer([:positive])}\n")
+      File.write!(workpad_path, "local notes that should stay untracked\n")
 
       File.write!(
         report_path,
@@ -84,11 +91,27 @@ defmodule SymphonyElixir.KeplerRunnerTest do
         })
       )
 
-      git!(workspace_path, ["add", "lib-change.txt", ".kepler/pr-report.json"])
+      git!(workspace_path, ["add", "lib-change.txt"])
       git!(workspace_path, ["commit", "-m", "Apply #{branch} fixture change"])
 
       if Keyword.get(opts, :push?, false) do
         git!(workspace_path, ["push", "-u", "origin", branch])
+      end
+    end
+
+    defp assert_reference_repo_present!(workspace_path) do
+      reference_readme = Path.join(workspace_path, ".kepler/refs/repo-web/README.md")
+
+      case File.read(reference_readme) do
+        {:ok, content} ->
+          if content =~ "Reference repo" do
+            :ok
+          else
+            raise "expected reference repo README, got: #{inspect(content)}"
+          end
+
+        {:error, reason} ->
+          raise "failed to read reference repo README: #{inspect(reason)}"
       end
     end
 
@@ -125,8 +148,10 @@ defmodule SymphonyElixir.KeplerRunnerTest do
   setup do
     root = Path.join(System.tmp_dir!(), "kepler-runner-test-#{System.unique_integer([:positive])}")
     config_path = Path.join(root, "kepler.yml")
-    remote_path = Path.join(root, "remote.git")
-    source_path = Path.join(root, "source")
+    remote_api_path = Path.join(root, "remote-api.git")
+    source_api_path = Path.join(root, "source-api")
+    remote_web_path = Path.join(root, "remote-web.git")
+    source_web_path = Path.join(root, "source-web")
 
     original_config_path = Application.get_env(:symphony_elixir, :kepler_config_file_path)
     original_github_token = System.get_env("GITHUB_TOKEN")
@@ -136,8 +161,9 @@ defmodule SymphonyElixir.KeplerRunnerTest do
     original_app_server_scenario = :persistent_term.get({FakeAppServer, :scenario}, :__missing__)
 
     File.mkdir_p!(root)
-    init_remote_repo!(source_path, remote_path)
-    write_kepler_config!(config_path, root, remote_path)
+    init_remote_repo!(source_api_path, remote_api_path, readme: "# Primary repo\n")
+    init_remote_repo!(source_web_path, remote_web_path, readme: "# Reference repo\n")
+    write_kepler_config!(config_path, root, remote_api_path, remote_web_path)
 
     Config.set_config_file_path(config_path)
     System.put_env("GITHUB_TOKEN", "runner-test-token")
@@ -177,6 +203,23 @@ defmodule SymphonyElixir.KeplerRunnerTest do
     assert body =~ "## Summary"
     assert body =~ "mix test test/symphony_elixir/kepler_runner_test.exs"
     assert result.branch == "kepler/APP-42"
+    assert result.pr_url == "https://github.com/example/repo-api/pull/1"
+  end
+
+  test "runner syncs configured reference repositories as read-only context and ignores local operational files" do
+    :persistent_term.put({FakeAppServer, :scenario}, :push_commit_with_reference_context)
+
+    assert {:ok, result} =
+             Runner.run(run("APP-44", "Inspect upstream context"),
+               github_client: FakeGitHubClient,
+               linear_client: FakeLinearClient,
+               app_server_module: FakeAppServer
+             )
+
+    assert_receive {:app_server_started_on_branch, "kepler/APP-44", "kepler/APP-44"}
+    assert_receive {:app_server_prompt, prompt}
+    assert prompt =~ ".kepler/refs/repo-web"
+    assert_receive {:find_open_pull_request, "kepler/APP-44"}
     assert result.pr_url == "https://github.com/example/repo-api/pull/1"
   end
 
@@ -272,12 +315,12 @@ defmodule SymphonyElixir.KeplerRunnerTest do
     })
   end
 
-  defp init_remote_repo!(source_path, remote_path) do
+  defp init_remote_repo!(source_path, remote_path, opts) do
     File.mkdir_p!(source_path)
     git!(source_path, ["init", "-b", "main"])
     git!(source_path, ["config", "user.name", "Kepler Runner Test"])
     git!(source_path, ["config", "user.email", "kepler-runner@example.com"])
-    File.write!(Path.join(source_path, "README.md"), "# Runner test\n")
+    File.write!(Path.join(source_path, "README.md"), Keyword.get(opts, :readme, "# Runner test\n"))
     git!(source_path, ["add", "README.md"])
     git!(source_path, ["commit", "-m", "Initial commit"])
 
@@ -286,7 +329,7 @@ defmodule SymphonyElixir.KeplerRunnerTest do
     git!(source_path, ["push", "-u", "origin", "main"])
   end
 
-  defp write_kepler_config!(config_path, root, remote_path) do
+  defp write_kepler_config!(config_path, root, remote_api_path, remote_web_path) do
     File.write!(
       config_path,
       """
@@ -304,10 +347,17 @@ defmodule SymphonyElixir.KeplerRunnerTest do
       repositories:
         - id: "repo-api"
           full_name: "example/repo-api"
-          clone_url: "#{remote_path}"
+          clone_url: "#{remote_api_path}"
           default_branch: "main"
           workflow_path: "WORKFLOW.md"
           labels: ["api"]
+          reference_repository_ids: ["repo-web"]
+        - id: "repo-web"
+          full_name: "example/repo-web"
+          clone_url: "#{remote_web_path}"
+          default_branch: "main"
+          workflow_path: "WORKFLOW.md"
+          labels: ["web"]
       """
     )
   end

@@ -258,6 +258,9 @@ defmodule SymphonyElixir.KeplerConfigTest do
              ["repo:contracts"],
              ["repo:admin-ui"]
            ]
+
+    assert Enum.find(settings.repositories, &(&1.id == "web")).reference_repository_ids == ["api"]
+    assert Enum.find(settings.repositories, &(&1.id == "worker")).reference_repository_ids == ["api", "events"]
   end
 
   test "loads the committed deploy config with env-backed secrets and repo routing" do
@@ -299,6 +302,53 @@ defmodule SymphonyElixir.KeplerConfigTest do
              "contracts",
              "admin-ui"
            ]
+
+    assert Enum.find(settings.repositories, &(&1.id == "web")).reference_repository_ids == ["api"]
+    assert Enum.find(settings.repositories, &(&1.id == "worker")).reference_repository_ids == ["api", "events"]
+  end
+
+  test "rejects unknown reference repositories" do
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+
+    assert {:error, {:invalid_kepler_config, message}} =
+             Config.load_from_string("""
+             service_name: "Kepler"
+             linear:
+               api_key: "linear-token"
+               webhook_secret: "linear-secret"
+             github:
+               bot_name: "Kepler Bot"
+               bot_email: "kepler@example.com"
+             repositories:
+               - id: "repo-api"
+                 full_name: "example/repo-api"
+                 clone_url: "https://github.com/example/repo-api.git"
+                 reference_repository_ids: ["repo-missing"]
+             """)
+
+    assert message =~ "repositories.repo-api.reference_repository_ids includes unknown repository"
+  end
+
+  test "rejects self-referential reference repositories" do
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+
+    assert {:error, {:invalid_kepler_config, message}} =
+             Config.load_from_string("""
+             service_name: "Kepler"
+             linear:
+               api_key: "linear-token"
+               webhook_secret: "linear-secret"
+             github:
+               bot_name: "Kepler Bot"
+               bot_email: "kepler@example.com"
+             repositories:
+               - id: "repo-api"
+                 full_name: "example/repo-api"
+                 clone_url: "https://github.com/example/repo-api.git"
+                 reference_repository_ids: ["repo-api"]
+             """)
+
+    assert message =~ "repositories.repo-api.reference_repository_ids cannot include itself"
   end
 
   defp base_config(opts \\ []) do

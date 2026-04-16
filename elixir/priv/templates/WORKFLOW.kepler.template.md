@@ -44,7 +44,8 @@ If `follow_up_prompts` is present, incorporate those follow-up requests before d
 Hosted execution contract:
 
 - This is an unattended Kepler run. Work end to end without asking a human to take intermediate actions.
-- Kepler has already routed this task to the correct repository. Stay inside this workspace and do not attempt cross-repo work.
+- Kepler has already routed this task to the correct primary repository.
+- If `.kepler/refs/` exists, those sibling checkouts are read-only context repositories. You may inspect them to understand upstream/downstream integrations, but never edit, commit, or open PRs from them.
 - The runner already synchronized the workspace to the repository's configured base branch before this turn started.
 - Kepler hosted mode is session-driven. Do not assume tracker polling, issue state transitions, or Linear comment editing are available inside the run.
 

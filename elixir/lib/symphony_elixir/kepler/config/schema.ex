@@ -224,6 +224,7 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
       field(:team_keys, {:array, :string}, default: [])
       field(:project_ids, {:array, :string}, default: [])
       field(:project_slugs, {:array, :string}, default: [])
+      field(:reference_repository_ids, {:array, :string}, default: [])
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -242,7 +243,8 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
           :labels,
           :team_keys,
           :project_ids,
-          :project_slugs
+          :project_slugs,
+          :reference_repository_ids
         ],
         empty_values: []
       )
@@ -251,6 +253,7 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
       |> update_change(:team_keys, &normalize_string_list/1)
       |> update_change(:project_ids, &normalize_string_list/1)
       |> update_change(:project_slugs, &normalize_string_list/1)
+      |> update_change(:reference_repository_ids, &normalize_string_list/1)
       |> validate_inclusion(:provider, ["codex"])
     end
 
@@ -394,6 +397,7 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
     |> maybe_add_missing_secret("linear.webhook_secret", settings.linear.webhook_secret)
     |> validate_linear_auth(settings.linear)
     |> validate_github_auth(settings.github)
+    |> validate_reference_repositories(settings.repositories)
     |> case do
       [] ->
         {:ok, settings}
@@ -606,6 +610,29 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
 
   defp validate_private_key(_private_key),
     do: {:error, "must be a valid PEM-encoded private key"}
+
+  defp validate_reference_repositories(errors, repositories) when is_list(repositories) do
+    known_ids = MapSet.new(Enum.map(repositories, & &1.id))
+
+    reference_errors =
+      repositories
+      |> Enum.flat_map(fn repository ->
+        Enum.flat_map(repository.reference_repository_ids || [], fn reference_id ->
+          cond do
+            reference_id == repository.id ->
+              ["repositories.#{repository.id}.reference_repository_ids cannot include itself"]
+
+            MapSet.member?(known_ids, reference_id) ->
+              []
+
+            true ->
+              ["repositories.#{repository.id}.reference_repository_ids includes unknown repository #{inspect(reference_id)}"]
+          end
+        end)
+      end)
+
+    errors ++ reference_errors
+  end
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
