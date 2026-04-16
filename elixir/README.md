@@ -173,6 +173,10 @@ The default container behavior is:
 4. authenticate `codex` non-interactively from `OPENAI_API_KEY` when no cached login exists
 5. launch Kepler through `./scripts/run-kepler.sh --port $PORT`
 
+The shipped Docker image now defaults `PORT=8080` and exposes `8080`, which matches Railway's
+default public service port. You can still override `PORT`, but the recommended Railway path is to
+leave the image on `8080` and keep the Railway service domain/internal port on `8080`.
+
 Recommended Railway settings:
 
 - attach one volume at `/data`

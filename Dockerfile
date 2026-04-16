@@ -4,6 +4,7 @@ ARG CODEX_NPM_PACKAGE_VERSION=0.120.0
 
 ENV MIX_ENV=prod \
     HOME=/data/home \
+    PORT=8080 \
     KEPLER_CONFIG_PATH=/app/elixir/kepler.yml \
     KEPLER_WORKSPACE_ROOT=/data/workspaces \
     KEPLER_STATE_ROOT=/data/state \
@@ -33,6 +34,6 @@ COPY elixir ./
 RUN chmod +x ./scripts/run-kepler.sh ./scripts/docker-entrypoint.sh \
  && mix build
 
-EXPOSE 4040
+EXPOSE 8080
 
 ENTRYPOINT ["./scripts/docker-entrypoint.sh"]

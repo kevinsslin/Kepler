@@ -657,11 +657,13 @@ Recommended Railway operator steps:
    - GitHub auth:
      - preferred: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_BASE64`
      - fallback: `GITHUB_TOKEN`
-5. Generate a Railway public domain.
-6. After the service is live, wire that public URL into the Linear app:
+5. Keep the service/domain port on `8080`. The shipped Docker image now defaults `PORT=8080` and
+   exposes `8080`, so you should not need a custom port override for Railway.
+6. Generate a Railway public domain.
+7. After the service is live, wire that public URL into the Linear app:
    - webhook URL: `https://<domain>/webhooks/linear`
    - callback URL: `https://<domain>/linear/oauth/callback`
-7. Smoke test:
+8. Smoke test:
    - `GET /api/v1/kepler/health`
    - `GET /api/v1/kepler/runs` with `Authorization: Bearer <KEPLER_API_TOKEN>`
    - delegate one issue that has exactly one `repo:*` routing label

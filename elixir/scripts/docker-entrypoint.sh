@@ -4,7 +4,7 @@ set -eu
 APP_ROOT="${APP_ROOT:-/app/elixir}"
 CONFIG_PATH="${KEPLER_CONFIG_PATH:-$APP_ROOT/kepler.yml}"
 RUNTIME_CONFIG_DIR="${KEPLER_RUNTIME_CONFIG_DIR:-/data/config}"
-PORT_VALUE="${PORT:-4040}"
+PORT_VALUE="${PORT:-8080}"
 CODEX_COMMAND="${CODEX_BIN:-codex}"
 
 export HOME="${HOME:-/data/home}"
