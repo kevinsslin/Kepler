@@ -95,6 +95,22 @@ defmodule SymphonyElixir.KeplerTest do
   defmodule FakeRunner do
     alias SymphonyElixir.Kepler.Run
 
+    def default_workpad_markdown do
+      """
+      ## Kepler Workpad
+
+      ### Plan
+
+      - [ ] Inspect the selected repository
+      - [ ] Implement the requested code change
+
+      ### Acceptance Criteria
+
+      - [ ] Requested behavior is implemented
+      """
+      |> String.trim()
+    end
+
     @spec run(Run.t(), keyword()) :: {:ok, map()}
     def run(run, opts \\ []) do
       if recipient = :persistent_term.get({__MODULE__, :recipient}, nil) do
@@ -147,6 +163,8 @@ defmodule SymphonyElixir.KeplerTest do
           github_installation_id: 99,
           pr_url: "https://github.com/example/#{run.repository_id}/pull/1",
           summary: "Run complete for #{run.repository_id}",
+          workpad_hash: "workpad-default-hash",
+          workpad_markdown: default_workpad_markdown(),
           workspace_path: "/tmp/#{run.repository_id}"
         })
 
@@ -157,12 +175,18 @@ defmodule SymphonyElixir.KeplerTest do
       [
         %{event: :session_started, details: %{session_id: "fake-session"}},
         %{
+          event: :workpad_snapshot,
+          details: %{
+            hash: "workpad-default-hash",
+            markdown: default_workpad_markdown()
+          }
+        },
+        %{
           event: :notification,
           payload: %{
             "method" => "item/agentMessage/delta",
             "params" => %{
-              "delta" =>
-                "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready."
+              "delta" => "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready."
             }
           }
         },
@@ -215,6 +239,7 @@ defmodule SymphonyElixir.KeplerTest do
     persistent_put({FakeRunner, :recipient}, self())
     persistent_put({FakeRunner, :release}, :immediate)
     persistent_put({FakeRunner, :events}, nil)
+
     persistent_put({FakeRunner, :result}, %{
       branch: "kepler/KEP-1",
       codex_result: %{
@@ -228,6 +253,7 @@ defmodule SymphonyElixir.KeplerTest do
       summary: "Run complete for repo-api",
       workspace_path: "/tmp/repo-api"
     })
+
     persistent_put({FakeLinearClient, :suggestions}, [])
 
     start_supervised!(ControlPlane)
@@ -311,21 +337,22 @@ defmodule SymphonyElixir.KeplerTest do
 
     assert_receive {:issue_state_update, "issue-1", "In Progress"}
     assert_receive {:issue_comment_create, "issue-1", comment_id, started_comment}
-    assert started_comment =~ "## Kepler Worklog"
+    assert started_comment =~ "## Kepler Workpad"
     assert started_comment =~ "Status: `executing`"
     assert started_comment =~ "Repository: `example/repo-api`"
     assert started_comment =~ "Branch: `"
     assert started_comment =~ "KEP-42`"
+    refute started_comment =~ "## Kepler Workpad\n\n---\n\n## Kepler Workpad"
     assert started_comment =~ "Inspect the selected repository"
     assert_receive {:activity, "session-1", %{type: "thought", body: body}}
     assert body =~ "Acknowledged"
     assert_receive {:runner_run, "repo-api", "session-1", []}
     assert_receive {:issue_state_update, "issue-1", "In Review"}
     finished_comment = assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `completed`"))
-    assert finished_comment =~ "## Kepler Worklog"
+    assert finished_comment =~ "## Kepler Workpad"
     assert finished_comment =~ "Status: `completed`"
-    assert finished_comment =~ "Pull request: https://github.com/example/repo-api/pull/1"
-    assert finished_comment =~ "Implemented the requested change"
+    assert finished_comment =~ "Pull request: attached to the issue"
+    refute finished_comment =~ "## Kepler Workpad\n\n---\n\n## Kepler Workpad"
     assert_receive {:session_update, "session-1", %{externalUrls: [%{label: "Pull Request", url: pr_url}]}}
     assert pr_url =~ "repo-api"
     assert_receive {:issue_attachment, "issue-1", %{title: "Pull Request", url: ^pr_url}}
@@ -429,6 +456,7 @@ defmodule SymphonyElixir.KeplerTest do
 
     assert_eventually(fn ->
       snapshot = ControlPlane.snapshot()
+
       [%{status: "completed", repository_id: "repo-web"}] =
         Enum.filter(snapshot.runs, &(&1.linear_issue_id == "issue-choice-line"))
     end)
@@ -686,10 +714,8 @@ defmodule SymphonyElixir.KeplerTest do
     persistent_put({FakeRunner, :result}, %{
       branch: "kepler/KEP-NOOP",
       codex_result: %{
-        final_agent_message:
-          "I reviewed the issue context but did not produce any code changes or open a pull request.",
-        runtime_plan:
-          "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready.",
+        final_agent_message: "I reviewed the issue context but did not produce any code changes or open a pull request.",
+        runtime_plan: "Inspect the selected repository, make the requested code change, and open a pull request once the diff is ready.",
         tool_call_count: 1,
         tool_calls: ["linear_graphql"]
       },
@@ -713,13 +739,13 @@ defmodule SymphonyElixir.KeplerTest do
 
     assert_receive {:issue_state_update, "issue-noop", "In Progress"}
     assert_receive {:issue_comment_create, "issue-noop", comment_id, started_comment}
-    assert started_comment =~ "## Kepler Worklog"
+    assert started_comment =~ "## Kepler Workpad"
     assert_receive {:issue_state_update, "issue-noop", "Blocked"}
     finished_comment = assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `failed`"))
-    assert finished_comment =~ "## Kepler Worklog"
+    assert finished_comment =~ "## Kepler Workpad"
     assert finished_comment =~ "Status: `failed`"
     assert finished_comment =~ "Kepler requires a PR for every ticket"
-    assert finished_comment =~ "Final model response"
+    refute finished_comment =~ "#### Final model response"
     assert_receive {:activity, "session-noop", %{type: "error", body: body}}
     assert body =~ "Kepler requires a PR for every ticket"
     assert body =~ "No pull request URL was detected."
@@ -830,17 +856,117 @@ defmodule SymphonyElixir.KeplerTest do
                }
              })
 
-    assert_receive {:issue_comment_create, "issue-worklog-stream", comment_id, started_comment}
-    assert started_comment =~ "## Kepler Worklog"
-    assert started_comment =~ "Status: `executing`"
-    refute_receive {:issue_comment_update, ^comment_id, _body}, 200
+    refute_receive {:issue_comment_create, "issue-worklog-stream", _, _}, 200
+    refute_receive {:issue_comment_update, _, _}, 200
 
     assert_receive {:runner_waiting, "session-worklog-stream", ^release_ref, runner_pid}
     send(runner_pid, {:release_runner, release_ref})
 
-    finished_comment = assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `completed`"))
-    assert finished_comment =~ "## Kepler Worklog"
+    assert_receive {:issue_comment_create, "issue-worklog-stream", comment_id, finished_comment}
+    assert finished_comment =~ "## Kepler Workpad"
     assert finished_comment =~ "Status: `completed`"
+    assert finished_comment =~ "_Kepler did not receive a persistent workpad snapshot for this run._"
+    refute_receive {:issue_comment_update, ^comment_id, _body}, 200
+  end
+
+  test "workpad snapshots create once and update the same comment in place" do
+    release_ref = make_ref()
+
+    persistent_put(
+      {FakeLinearClient, :issue},
+      %SymphonyElixir.Kepler.Linear.IssueContext{
+        id: "issue-workpad-sync",
+        identifier: "KEP-WORKPAD",
+        title: "Mirror workpad into one comment",
+        description: "Workpad updates should reuse the same Linear comment",
+        labels: ["api"],
+        team_key: "ENG",
+        project_slug: "kepler"
+      }
+    )
+
+    persistent_put({FakeRunner, :release}, {:block_once, self(), release_ref})
+
+    first_workpad =
+      """
+      ## Kepler Workpad
+
+      ### Plan
+
+      - [ ] Inspect the selected repository
+      - [ ] Implement the requested code change
+      """
+      |> String.trim()
+
+    second_workpad =
+      """
+      ## Kepler Workpad
+
+      ### Plan
+
+      - [x] Inspect the selected repository
+      - [ ] Implement the requested code change
+      - [ ] Run targeted validation
+      """
+      |> String.trim()
+
+    persistent_put({FakeRunner, :events}, [
+      %{event: :session_started, details: %{session_id: "fake-session"}},
+      %{event: :workpad_snapshot, details: %{hash: "hash-1", markdown: first_workpad}},
+      %{
+        event: :notification,
+        payload: %{
+          "method" => "item/agentMessage/delta",
+          "params" => %{"delta" => "Planning the implementation before editing any files."}
+        }
+      },
+      %{event: :workpad_snapshot, details: %{hash: "hash-2", markdown: second_workpad}},
+      %{
+        event: :notification,
+        payload: %{
+          "method" => "item/agentMessage/delta",
+          "params" => %{"delta" => "Streaming text alone should not create another comment."}
+        }
+      }
+    ])
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "created",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-workpad-sync",
+                   "issue" => %{"id" => "issue-workpad-sync"}
+                 },
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    assert_receive {:issue_comment_create, "issue-workpad-sync", comment_id, started_comment}
+    assert started_comment =~ "Status: `executing`"
+    assert started_comment =~ "## Kepler Workpad"
+    refute started_comment =~ "## Kepler Workpad\n\n---\n\n## Kepler Workpad"
+    assert started_comment =~ "- [ ] Inspect the selected repository"
+    refute started_comment =~ "- [x] Inspect the selected repository"
+
+    updated_comment =
+      assert_receive_comment_update(
+        comment_id,
+        &String.contains?(&1, "- [x] Inspect the selected repository")
+      )
+
+    assert updated_comment =~ "- [ ] Run targeted validation"
+    refute_receive {:issue_comment_create, "issue-workpad-sync", _, _}, 200
+    refute_receive {:issue_comment_update, ^comment_id, _body}, 200
+
+    assert_receive {:runner_waiting, "session-workpad-sync", ^release_ref, runner_pid}
+    send(runner_pid, {:release_runner, release_ref})
+
+    finished_comment =
+      assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `completed`"))
+
+    assert finished_comment =~ "- [x] Inspect the selected repository"
+    assert finished_comment =~ "- [ ] Run targeted validation"
   end
 
   test "reuses the latest worklog comment for reruns on the same issue" do
@@ -900,7 +1026,8 @@ defmodule SymphonyElixir.KeplerTest do
         &String.contains?(&1, "Status: `executing`")
       )
 
-    assert started_comment =~ "## Kepler Worklog"
+    assert started_comment =~ "## Kepler Workpad"
+    refute started_comment =~ "## Kepler Workpad\n\n---\n\n## Kepler Workpad"
     refute_receive {:issue_comment_create, "issue-worklog-reuse", _, _}, 200
 
     finished_comment =
@@ -909,7 +1036,7 @@ defmodule SymphonyElixir.KeplerTest do
         &String.contains?(&1, "Status: `completed`")
       )
 
-    assert finished_comment =~ "Pull request: https://github.com/example/repo-api/pull/1"
+    assert finished_comment =~ "Pull request: attached to the issue"
   end
 
   test "no-pr runs that explicitly ask for more input are classified separately" do
@@ -929,10 +1056,8 @@ defmodule SymphonyElixir.KeplerTest do
     persistent_put({FakeRunner, :result}, %{
       branch: "kepler/KEP-INPUT",
       codex_result: %{
-        final_agent_message:
-          "I need more information about the expected frontend behavior before I can implement this change and open a pull request.",
-        runtime_plan:
-          "Inspect the selected repository, confirm the expected behavior, implement the requested code change, and open a pull request once the diff is ready.",
+        final_agent_message: "I need more information about the expected frontend behavior before I can implement this change and open a pull request.",
+        runtime_plan: "Inspect the selected repository, confirm the expected behavior, implement the requested code change, and open a pull request once the diff is ready.",
         tool_call_count: 0,
         tool_calls: []
       },

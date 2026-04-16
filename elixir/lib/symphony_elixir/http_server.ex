@@ -29,32 +29,7 @@ defmodule SymphonyElixir.HttpServer do
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
         with {:ok, ip} <- parse_host(host) do
-          Logger.info("Starting #{RuntimeMode.current()} HTTP server on #{normalize_host(host)}:#{port}")
-
-          endpoint_opts = [
-            server: true,
-            http: [ip: ip, port: port],
-            url: [host: normalize_host(host)],
-            orchestrator: orchestrator,
-            snapshot_timeout_ms: snapshot_timeout_ms,
-            secret_key_base: secret_key_base()
-          ]
-
-          endpoint_config =
-            :symphony_elixir
-            |> Application.get_env(Endpoint, [])
-            |> Keyword.merge(endpoint_opts)
-
-          Application.put_env(:symphony_elixir, Endpoint, endpoint_config)
-
-          case Endpoint.start_link() do
-            {:ok, pid} = result ->
-              Logger.info("HTTP endpoint ready on #{normalize_host(host)}:#{port} pid=#{inspect(pid)}")
-              result
-
-            other ->
-              other
-          end
+          start_endpoint(host, ip, port, orchestrator, snapshot_timeout_ms)
         end
 
       _ ->
@@ -72,6 +47,38 @@ defmodule SymphonyElixir.HttpServer do
     _error -> nil
   catch
     :exit, _reason -> nil
+  end
+
+  defp start_endpoint(host, ip, port, orchestrator, snapshot_timeout_ms) do
+    Logger.info("Starting #{RuntimeMode.current()} HTTP server on #{normalize_host(host)}:#{port}")
+
+    endpoint_opts = [
+      server: true,
+      http: [ip: ip, port: port],
+      url: [host: normalize_host(host)],
+      orchestrator: orchestrator,
+      snapshot_timeout_ms: snapshot_timeout_ms,
+      secret_key_base: secret_key_base()
+    ]
+
+    endpoint_config =
+      :symphony_elixir
+      |> Application.get_env(Endpoint, [])
+      |> Keyword.merge(endpoint_opts)
+
+    Application.put_env(:symphony_elixir, Endpoint, endpoint_config)
+    start_endpoint_server(host, port)
+  end
+
+  defp start_endpoint_server(host, port) do
+    case Endpoint.start_link() do
+      {:ok, pid} = result ->
+        Logger.info("HTTP endpoint ready on #{normalize_host(host)}:#{port} pid=#{inspect(pid)}")
+        result
+
+      other ->
+        other
+    end
   end
 
   defp parse_host({_, _, _, _} = ip), do: {:ok, ip}

@@ -21,10 +21,10 @@ defmodule SymphonyElixir.Kepler.Linear.Webhook do
       {:ok,
        %{
          action: action,
-          agent_session_id: session_id,
-          issue_id: issue_id,
-          prompt_context: prompt_context(agent_session, data, payload),
-          prompt_body: prompt_body(action, agent_session, data, payload)
+         agent_session_id: session_id,
+         issue_id: issue_id,
+         prompt_context: prompt_context(agent_session, data, payload),
+         prompt_body: prompt_body(action, agent_session, data, payload)
        }}
     else
       _ -> {:error, :invalid_agent_session_webhook}

@@ -49,6 +49,8 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     assert resolved.workflow_path == repo_workflow_path
     assert resolved.workflow.prompt =~ "Repo-local prompt"
     refute resolved.workflow.prompt =~ "Fallback prompt"
+    assert resolved.workflow.prompt =~ "All outward-facing artifacts for this run must be written in English"
+    assert resolved.workflow.prompt =~ "Do not paste raw local filesystem paths for screenshot evidence"
     assert resolved.settings.workspace.root == Config.settings!().workspace.root
     assert resolved.settings.worker.ssh_hosts == []
     assert resolved.settings.codex.thread_sandbox == "danger-full-access"
@@ -69,6 +71,7 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
 
     assert resolved.workflow_path == fallback_path
     assert resolved.workflow.prompt =~ "Fallback only prompt"
+    assert resolved.workflow.prompt =~ "All outward-facing artifacts for this run must be written in English"
   end
 
   test "custom repository workflow path overrides fallback when present", %{root: root} do
@@ -138,6 +141,8 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     assert workflow.prompt =~ "passing automated tests are mandatory"
     assert workflow.prompt =~ "commit the work and push the issue branch before finishing"
     assert workflow.prompt =~ "Do not create duplicate PRs"
+    assert workflow.prompt =~ "All outward-facing artifacts for this run must be written in English"
+    assert workflow.prompt =~ "Do not paste raw local filesystem paths for screenshot evidence"
   end
 
   test "hosted codex sandbox overrides repo-local workflow sandbox settings", %{root: root} do

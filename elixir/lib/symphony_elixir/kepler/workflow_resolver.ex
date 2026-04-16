@@ -7,6 +7,16 @@ defmodule SymphonyElixir.Kepler.WorkflowResolver do
   alias SymphonyElixir.Kepler.Config
   alias SymphonyElixir.Workflow
 
+  @hosted_prompt_prefix """
+  Hosted Kepler operator rules:
+
+  - All outward-facing artifacts for this run must be written in English, regardless of the issue language. This includes `.kepler/workpad.md`, `.kepler/pr-report.json` text fields, the final agent response, commit messages, and PR title/body text.
+  - `.kepler/workpad.md` is mirrored into a single persistent Linear issue comment. Keep it concise, reviewer-facing, and updated in place.
+  - Do not keep a chronological diary or repeat micro-updates. Replace stale checklist items and notes in place instead of appending long narrative paragraphs.
+  - Do not paste raw local filesystem paths for screenshot evidence into `.kepler/workpad.md`. Keep local screenshot paths in `.kepler/pr-report.json`; in the workpad, summarize the evidence briefly in English.
+  - Keep screenshot previews and renderable evidence in the pull request, not in the Linear workpad comment.
+  """
+
   @type resolved_workflow :: %{
           workflow: Workflow.loaded_workflow(),
           settings: Schema.t(),
@@ -29,7 +39,7 @@ defmodule SymphonyElixir.Kepler.WorkflowResolver do
          {:ok, settings} <- Schema.parse(workflow.config) do
       {:ok,
        %{
-         workflow: workflow,
+         workflow: prepend_hosted_prompt_rules(workflow),
          settings: normalize_settings(settings),
          workflow_path: chosen_path
        }}
@@ -51,5 +61,19 @@ defmodule SymphonyElixir.Kepler.WorkflowResolver do
             turn_sandbox_policy: hosted_codex.turn_sandbox_policy
         }
     }
+  end
+
+  defp prepend_hosted_prompt_rules(%{prompt: prompt, prompt_template: prompt_template} = workflow) do
+    if String.contains?(prompt, "Hosted Kepler operator rules:") do
+      workflow
+    else
+      prefix = String.trim(@hosted_prompt_prefix)
+
+      %{
+        workflow
+        | prompt: Enum.join([prefix, String.trim(prompt)], "\n\n"),
+          prompt_template: Enum.join([prefix, String.trim(prompt_template)], "\n\n")
+      }
+    end
   end
 end

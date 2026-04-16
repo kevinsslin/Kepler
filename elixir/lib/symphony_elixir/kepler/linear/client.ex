@@ -230,7 +230,6 @@ defmodule SymphonyElixir.Kepler.Linear.Client do
     else
       false -> {:error, :issue_update_failed}
       {:error, reason} -> {:error, reason}
-      _ -> {:error, :issue_update_failed}
     end
   end
 
@@ -245,7 +244,6 @@ defmodule SymphonyElixir.Kepler.Linear.Client do
     else
       false -> {:error, :comment_create_failed}
       {:error, reason} -> {:error, reason}
-      _ -> {:error, :comment_create_failed}
     end
   end
 
@@ -258,7 +256,6 @@ defmodule SymphonyElixir.Kepler.Linear.Client do
     else
       false -> {:error, :comment_update_failed}
       {:error, reason} -> {:error, reason}
-      _ -> {:error, :comment_update_failed}
     end
   end
 

@@ -22,6 +22,8 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
           github_installation_id: integer() | nil,
           pr_url: String.t() | nil,
           summary: String.t(),
+          workpad_hash: String.t() | nil,
+          workpad_markdown: String.t() | nil,
           workspace_path: String.t()
         }
 
@@ -117,6 +119,7 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     case result do
       {:ok, app_result} ->
         branch = current_branch(workspace_path)
+        {workpad_markdown, workpad_hash} = current_workpad_snapshot(workspace_path)
 
         with :ok <- ensure_expected_issue_branch(branch, expected_branch),
              :ok <- ensure_clean_workspace(workspace_path),
@@ -136,6 +139,8 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
              github_installation_id: installation_id(github_client, repository),
              pr_url: pr_url,
              summary: summary_text(workspace_path, branch, pr_url, app_result.result),
+             workpad_hash: workpad_hash,
+             workpad_markdown: workpad_markdown,
              workspace_path: workspace_path
            }}
         end
@@ -146,6 +151,8 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
   end
 
   defp run_codex(workspace_path, issue, prompt, settings, github_env, linear_client, app_server_module, on_event) do
+    reset_workpad_snapshot_state(workspace_path)
+
     app_server_module.run(
       workspace_path,
       prompt,
@@ -154,6 +161,7 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
       env: github_env,
       on_message: fn message ->
         _ = on_event.(message)
+        _ = maybe_emit_workpad_snapshot(workspace_path, on_event)
       end,
       tool_executor: fn tool, arguments ->
         DynamicTool.execute(
@@ -165,6 +173,7 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
         )
       end
     )
+    |> tap(fn _ -> maybe_emit_workpad_snapshot(workspace_path, on_event) end)
   end
 
   defp maybe_run_after_create_hook(false, _workspace_path, _run, _settings, _github_env), do: :ok
@@ -469,45 +478,44 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
   end
 
   defp summary_text(workspace_path, branch, pr_url, codex_result) do
-    branch_text =
-      case branch do
-        nil -> "No branch was detected."
-        value -> "Current branch: `#{value}`."
-      end
-
-    pr_text =
-      case pr_url do
-        nil -> "No pull request URL was detected."
-        value -> "Pull request: #{value}"
-      end
-
-    changed_files =
-      case System.cmd("git", ["status", "--short"], cd: workspace_path, stderr_to_stdout: true) do
-        {output, 0} ->
-          output
-          |> String.trim()
-          |> case do
-            "" -> "Workspace is clean after execution."
-            lines -> "Workspace status:\n\n```\n#{lines}\n```"
-          end
-
-        _ ->
-          "Workspace status could not be collected."
-      end
-
-    final_message =
-      case codex_result do
-        %{final_agent_message: value} when is_binary(value) and value != "" ->
-          "Final Codex response:\n\n#{value}"
-
-        _ ->
-          nil
-      end
-
-    [branch_text, pr_text, changed_files, final_message]
+    [
+      branch_summary(branch),
+      pull_request_summary(pr_url),
+      workspace_status_summary(workspace_path),
+      final_response_summary(codex_result)
+    ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n\n")
   end
+
+  defp branch_summary(nil), do: "No branch was detected."
+  defp branch_summary(value), do: "Current branch: `#{value}`."
+
+  defp pull_request_summary(nil), do: "No pull request URL was detected."
+  defp pull_request_summary(value), do: "Pull request: #{value}"
+
+  defp workspace_status_summary(workspace_path) do
+    case System.cmd("git", ["status", "--short"], cd: workspace_path, stderr_to_stdout: true) do
+      {output, 0} ->
+        format_workspace_status(output)
+
+      _ ->
+        "Workspace status could not be collected."
+    end
+  end
+
+  defp format_workspace_status(output) do
+    case String.trim(output) do
+      "" -> "Workspace is clean after execution."
+      lines -> "Workspace status:\n\n```\n#{lines}\n```"
+    end
+  end
+
+  defp final_response_summary(%{final_agent_message: value}) when is_binary(value) and value != "" do
+    "Final Codex response:\n\n#{value}"
+  end
+
+  defp final_response_summary(_codex_result), do: nil
 
   defp maybe_publish_pull_request(github_client, repository, run, branch, workspace_path, github_env) do
     if is_nil(branch) or branch == repository.default_branch do
@@ -719,6 +727,71 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
 
   defp reference_workspace_path(workspace_path, repository_id) do
     Path.join([workspace_path, ".kepler", "refs", repository_id])
+  end
+
+  defp workpad_path(workspace_path) do
+    Path.join([workspace_path, ".kepler", "workpad.md"])
+  end
+
+  defp reset_workpad_snapshot_state(workspace_path) do
+    Process.delete({__MODULE__, :workpad_hash, workspace_path})
+    :ok
+  end
+
+  defp maybe_emit_workpad_snapshot(workspace_path, on_event) do
+    case current_workpad_snapshot(workspace_path) do
+      {nil, nil} ->
+        :ok
+
+      {markdown, hash} ->
+        previous_hash = Process.get({__MODULE__, :workpad_hash, workspace_path})
+
+        if hash != previous_hash do
+          Process.put({__MODULE__, :workpad_hash, workspace_path}, hash)
+
+          on_event.(%{
+            event: :workpad_snapshot,
+            details: %{
+              hash: hash,
+              markdown: markdown
+            }
+          })
+        else
+          :ok
+        end
+    end
+  end
+
+  defp current_workpad_snapshot(workspace_path) do
+    case File.read(workpad_path(workspace_path)) do
+      {:ok, markdown} ->
+        normalized =
+          markdown
+          |> String.trim()
+          |> case do
+            "" -> nil
+            trimmed -> trimmed
+          end
+
+        case normalized do
+          nil ->
+            {nil, nil}
+
+          _ ->
+            hash =
+              :sha256
+              |> :crypto.hash(normalized)
+              |> Base.encode16(case: :lower)
+
+            {normalized, hash}
+        end
+
+      {:error, :enoent} ->
+        {nil, nil}
+
+      {:error, _reason} ->
+        {nil, nil}
+    end
   end
 
   defp clone_url(repository) do

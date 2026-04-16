@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   require Logger
 
   alias SymphonyElixir.Kepler.Config
+  alias SymphonyElixir.Kepler.Config.Schema
   alias SymphonyElixir.Kepler.Execution.Runner
   alias SymphonyElixir.Kepler.Linear.Client, as: LinearClient
   alias SymphonyElixir.Kepler.Linear.Webhook
@@ -65,11 +66,13 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     state = load_state(settings)
     state = recover_interrupted_runs(state)
     state = schedule_dispatch(state, 0)
+
     Logger.info(
       "Kepler control plane ready repositories=#{length(settings.repositories)} " <>
-        "auth_mode=#{inspect(SymphonyElixir.Kepler.Config.Schema.linear_auth_mode(settings.linear))} " <>
+        "auth_mode=#{inspect(Schema.linear_auth_mode(settings.linear))} " <>
         "max_concurrent_runs=#{settings.limits.max_concurrent_runs}"
     )
+
     {:ok, state}
   end
 
@@ -534,8 +537,13 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
   defp completed_response_body(_run), do: "Run completed."
 
-  defp failed_response_body(%Run{last_error: last_error, final_agent_message: final_agent_message, summary: summary})
-       when is_binary(last_error) and last_error != "" and is_binary(final_agent_message) and final_agent_message != "" and
+  defp failed_response_body(%Run{
+         last_error: last_error,
+         final_agent_message: final_agent_message,
+         summary: summary
+       })
+       when is_binary(last_error) and last_error != "" and
+              is_binary(final_agent_message) and final_agent_message != "" and
               is_binary(summary) and summary != "" do
     """
     Run failed: #{last_error}
@@ -559,8 +567,12 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     |> String.trim()
   end
 
-  defp failed_response_body(%Run{last_error: last_error, final_agent_message: final_agent_message})
-       when is_binary(last_error) and last_error != "" and is_binary(final_agent_message) and final_agent_message != "" do
+  defp failed_response_body(%Run{
+         last_error: last_error,
+         final_agent_message: final_agent_message
+       })
+       when is_binary(last_error) and last_error != "" and
+              is_binary(final_agent_message) and final_agent_message != "" do
     """
     Run failed: #{last_error}
 
@@ -594,6 +606,8 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
   defp merge_terminal_attrs(%Run{} = run, attrs) do
     attrs
+    |> preserve_existing_attr(:workpad_markdown, run.workpad_markdown)
+    |> preserve_existing_attr(:workpad_hash, run.workpad_hash)
     |> preserve_existing_attr(:runtime_plan, run.runtime_plan)
     |> preserve_existing_attr(:tool_calls, run.tool_calls)
     |> preserve_existing_attr(:tool_call_count, run.tool_call_count)
@@ -621,25 +635,16 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       summary: result.summary,
       tool_call_count: codex_result_field(result, :tool_call_count) || 0,
       tool_calls: codex_result_field(result, :tool_calls) || [],
+      workpad_hash: Map.get(result, :workpad_hash) || Map.get(result, "workpad_hash"),
+      workpad_markdown: Map.get(result, :workpad_markdown) || Map.get(result, "workpad_markdown"),
       workspace_path: result.workspace_path
     }
 
-    case classify_terminal_result(result) do
-      {:completed, nil} ->
-        {"completed", Map.put(base_attrs, :last_error, nil)}
+    terminal_status_attrs(classify_terminal_result(result), base_attrs)
+  end
 
-      {:completed, last_error} ->
-        {"completed", Map.put(base_attrs, :last_error, last_error)}
-
-      {:needs_input, last_error} ->
-        {"needs_input", Map.put(base_attrs, :last_error, last_error)}
-
-      {:repository_clarification, last_error} ->
-        {"repository_clarification", Map.put(base_attrs, :last_error, last_error)}
-
-      {:failed, last_error} ->
-        {"failed", Map.put(base_attrs, :last_error, last_error)}
-    end
+  defp terminal_status_attrs({status, last_error}, base_attrs) do
+    {Atom.to_string(status), Map.put(base_attrs, :last_error, last_error)}
   end
 
   defp classify_terminal_result(result) do
@@ -656,8 +661,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         {:needs_input, normalize_terminal_reason(final_message)}
 
       true ->
-        {:failed,
-         "Run finished without opening a pull request. Kepler requires a PR for every ticket unless it explicitly asks for more input or repository clarification."}
+        {:failed, "Run finished without opening a pull request. Kepler requires a PR for every ticket unless it explicitly asks for more input or repository clarification."}
     end
   end
 
@@ -902,6 +906,17 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     })
   end
 
+  defp update_run_from_event(
+         %Run{} = run,
+         %{event: :workpad_snapshot, details: %{markdown: markdown, hash: hash}}
+       )
+       when is_binary(markdown) and markdown != "" and is_binary(hash) and hash != "" do
+    Run.touch(run, %{
+      workpad_hash: hash,
+      workpad_markdown: markdown
+    })
+  end
+
   defp update_run_from_event(%Run{} = run, _message), do: run
 
   defp emit_progress_activity(%Run{} = run, message) do
@@ -1033,118 +1048,153 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
     cond do
       run.worklog_comment_id && (force? || refresh?) ->
-        body = worklog_comment_body(state, run)
-
-        case linear_client_module().update_issue_comment(run.worklog_comment_id, body) do
-          :ok ->
-            {state, run}
-
-          {:error, reason} ->
-            Logger.warning(
-              "Failed to update Linear worklog comment for Kepler run #{run.id}: #{inspect(reason)}"
-            )
-
-            {state, run}
-        end
+        update_worklog_comment(state, run)
 
       blank_worklog_text?(run.worklog_comment_id) and should_create_worklog_comment?(run, force?) ->
-        body = worklog_comment_body(state, run)
-
-        case linear_client_module().create_issue_comment(run.linear_issue_id, body) do
-          {:ok, comment_id} ->
-            updated_run = Run.touch(run, %{worklog_comment_id: comment_id})
-
-            updated_state =
-              state
-              |> put_run(updated_run)
-              |> put_issue_worklog_comment_id(run.linear_issue_id, comment_id)
-              |> persist_state()
-
-            {updated_state, updated_run}
-
-          {:error, reason} ->
-            Logger.warning(
-              "Failed to create Linear worklog comment for Kepler run #{run.id}: #{inspect(reason)}"
-            )
-
-            {state, run}
-        end
+        create_worklog_comment(state, run)
 
       true ->
         {state, run}
     end
   end
 
+  defp update_worklog_comment(state, %Run{} = run) do
+    body = worklog_comment_body(state, run)
+
+    case linear_client_module().update_issue_comment(run.worklog_comment_id, body) do
+      :ok ->
+        {state, run}
+
+      {:error, reason} ->
+        Logger.warning("Failed to update Linear worklog comment for Kepler run #{run.id}: #{inspect(reason)}")
+        {state, run}
+    end
+  end
+
+  defp create_worklog_comment(state, %Run{} = run) do
+    body = worklog_comment_body(state, run)
+
+    case linear_client_module().create_issue_comment(run.linear_issue_id, body) do
+      {:ok, comment_id} ->
+        updated_run = Run.touch(run, %{worklog_comment_id: comment_id})
+
+        updated_state =
+          state
+          |> put_run(updated_run)
+          |> put_issue_worklog_comment_id(run.linear_issue_id, comment_id)
+          |> persist_state()
+
+        {updated_state, updated_run}
+
+      {:error, reason} ->
+        Logger.warning("Failed to create Linear worklog comment for Kepler run #{run.id}: #{inspect(reason)}")
+        {state, run}
+    end
+  end
+
   defp should_create_worklog_comment?(%Run{} = run, force?) do
-    force? ||
-      (is_binary(run.runtime_plan) and run.runtime_plan != "") ||
-      run.tool_call_count > 0
+    force? || present_worklog_text?(run.workpad_markdown)
   end
 
   defp worklog_comment_body(state, %Run{} = run) do
     repository = repository_for_run(state, run)
     reference_repositories = reference_repositories_for(state, repository)
-    sections =
+
+    metadata_lines =
       [
-        "## Kepler Worklog",
+        "## Kepler Workpad",
         "",
         "- Status: `#{run.status}`",
         "- Repository: `#{repository_label(repository, run.repository_id)}`",
         "- Branch: `#{display_branch(run)}`",
-        "- Reference repos: #{reference_repositories_label(reference_repositories)}",
-        terminal_result_line(run)
+        "- Reference repos: #{reference_repositories_label(reference_repositories)}"
       ]
-      |> append_section("Runtime plan", run.runtime_plan)
-      |> append_section("Execution", execution_summary(run))
-      |> append_section("Final model response", terminal_model_response(run))
-      |> append_section("Summary", terminal_summary(run))
+      |> maybe_append_line(pull_request_line(run))
+      |> maybe_append_line(terminal_result_line(run))
 
-    sections
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join("\n")
+    [
+      Enum.join(metadata_lines, "\n"),
+      workpad_body(run),
+      terminal_details_body(run)
+    ]
+    |> Enum.reject(&blank_worklog_text?/1)
+    |> Enum.join("\n\n---\n\n")
     |> String.trim()
   end
 
-  defp append_section(lines, _heading, nil), do: lines
-  defp append_section(lines, _heading, ""), do: lines
+  defp maybe_append_line(lines, nil), do: lines
+  defp maybe_append_line(lines, ""), do: lines
+  defp maybe_append_line(lines, line), do: lines ++ [line]
 
-  defp append_section(lines, heading, body) do
-    lines ++ ["", "### #{heading}", "", body]
+  defp workpad_body(%Run{workpad_markdown: markdown}) when is_binary(markdown) and markdown != "",
+    do: strip_workpad_heading(markdown)
+
+  defp workpad_body(%Run{} = run) do
+    """
+    _Kepler did not receive a persistent workpad snapshot for this run._
+
+    #{fallback_workpad_note(run)}
+    """
+    |> String.trim()
   end
 
-  defp execution_summary(%Run{} = run) do
-    cond do
-      run.tool_call_count > 0 ->
-        "- Tool calls completed: #{run.tool_call_count}\n- Tools used: #{format_tool_calls(run.tool_calls)}"
+  defp strip_workpad_heading(markdown) do
+    markdown
+    |> String.trim()
+    |> String.replace(~r/\A## (?:Kepler|Codex) Workpad\s*/u, "", global: false)
+    |> String.trim()
+    |> case do
+      "" -> String.trim(markdown)
+      body -> body
+    end
+  end
 
-      run.status == "executing" ->
-        "- Codex session started and is still reasoning."
+  defp fallback_workpad_note(%Run{status: status}) when status in ["executing", "queued"] do
+    "The run has started, but no `.kepler/workpad.md` content has been mirrored into Linear yet."
+  end
+
+  defp fallback_workpad_note(_run) do
+    "The hosted workflow expects `.kepler/workpad.md` to carry the live plan, checklist, validation, and blockers."
+  end
+
+  defp terminal_details_body(%Run{} = run) do
+    cond do
+      blank_worklog_text?(run.workpad_markdown) ->
+        [run_terminal_error(run), run_terminal_summary(run)]
+        |> Enum.reject(&blank_worklog_text?/1)
+        |> render_terminal_details()
+
+      run.status in ["failed", "needs_input", "repository_clarification"] ->
+        [run_terminal_error(run), run_terminal_summary(run)]
+        |> Enum.reject(&blank_worklog_text?/1)
+        |> render_terminal_details()
 
       true ->
         nil
     end
   end
 
-  defp terminal_model_response(%Run{final_agent_message: message, runtime_plan: runtime_plan})
-       when is_binary(message) and message != "" do
-    if is_binary(runtime_plan) and String.trim(message) == String.trim(runtime_plan) do
-      nil
-    else
-      message
-    end
+  defp render_terminal_details([]), do: nil
+  defp render_terminal_details(details), do: Enum.join(["### Kepler Result", "" | details], "\n")
+
+  defp run_terminal_error(%Run{status: status} = run)
+       when status in ["failed", "needs_input", "repository_clarification"] do
+    run.last_error
   end
 
-  defp terminal_model_response(_run), do: nil
+  defp run_terminal_error(_run), do: nil
 
-  defp terminal_summary(%Run{} = run) do
+  defp run_terminal_summary(%Run{} = run) do
     case String.trim(run.summary || "") do
       "" -> nil
-      trimmed -> trimmed
+      trimmed -> "#### Summary\n\n#{trimmed}"
     end
   end
 
-  defp terminal_result_line(%Run{pr_url: pr_url}) when is_binary(pr_url) and pr_url != "",
-    do: "- Pull request: #{pr_url}"
+  defp pull_request_line(%Run{pr_url: pr_url}) when is_binary(pr_url) and pr_url != "",
+    do: "- Pull request: attached to the issue"
+
+  defp pull_request_line(_run), do: nil
 
   defp terminal_result_line(%Run{status: status}) when status in ["executing", "queued"],
     do: "- Result: execution in progress."
@@ -1218,11 +1268,11 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   end
 
   defp worklog_refresh_event?(
-         %{event: :notification, payload: %{"method" => "item/agentMessage/delta"}},
-         %Run{runtime_plan: previous_plan},
-         %Run{runtime_plan: current_plan}
+         %{event: :workpad_snapshot},
+         %Run{workpad_hash: previous_hash},
+         %Run{workpad_hash: current_hash}
        ) do
-    blank_worklog_text?(previous_plan) and present_worklog_text?(current_plan)
+    previous_hash != current_hash and present_worklog_text?(current_hash)
   end
 
   defp worklog_refresh_event?(_message, _previous_run, _updated_run), do: false
@@ -1294,20 +1344,9 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     end
   end
 
-  defp truncate_runtime_plan(plan), do: plan
-
-  defp format_tool_calls([]), do: "_none_"
-
-  defp format_tool_calls(tool_calls) do
-    tool_calls
-    |> Enum.map_join(", ", fn tool_name -> "`#{tool_name}`" end)
-  end
-
   defp extract_first_path(payload, paths) when is_map(payload) do
     Enum.find_value(paths, &map_path(payload, &1))
   end
-
-  defp extract_first_path(_payload, _paths), do: nil
 
   defp map_path(value, []), do: value
 
@@ -1360,10 +1399,11 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   end
 
   defp predicted_issue_branch(%Run{} = run) do
-    run.linear_issue_identifier || run.linear_issue_id || "unknown"
-    |> then(fn issue_token ->
-      if String.starts_with?(issue_token, "kepler/"), do: issue_token, else: "kepler/#{issue_token}"
-    end)
+    run.linear_issue_identifier || run.linear_issue_id ||
+      "unknown"
+      |> then(fn issue_token ->
+        if String.starts_with?(issue_token, "kepler/"), do: issue_token, else: "kepler/#{issue_token}"
+      end)
   end
 
   defp maybe_transition_issue_state(_run, nil), do: :ok
@@ -1375,9 +1415,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         :ok
 
       {:error, reason} ->
-        Logger.warning(
-          "Failed to transition Linear issue #{run.linear_issue_identifier || run.linear_issue_id} to #{inspect(state_name)}: #{inspect(reason)}"
-        )
+        Logger.warning("Failed to transition Linear issue #{run.linear_issue_identifier || run.linear_issue_id} to #{inspect(state_name)}: #{inspect(reason)}")
 
         :ok
     end

@@ -428,6 +428,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     receive do
       {^port, {:data, {:eol, chunk}}} ->
         complete_line = pending_line <> to_string(chunk)
+
         handle_incoming(
           port,
           on_message,
@@ -509,10 +510,12 @@ defmodule SymphonyElixir.Codex.AppServer do
           payload,
           payload_string,
           method,
-          timeout_ms,
-          tool_executor,
-          auto_approve_requests,
-          updated_turn_state
+          %{
+            timeout_ms: timeout_ms,
+            tool_executor: tool_executor,
+            auto_approve_requests: auto_approve_requests,
+            turn_state: updated_turn_state
+          }
         )
 
       {:ok, payload} ->
@@ -689,8 +692,6 @@ defmodule SymphonyElixir.Codex.AppServer do
     Enum.find_value(paths, &map_path(payload, &1))
   end
 
-  defp extract_first_path(_payload, _paths), do: nil
-
   defp map_path(value, []), do: value
 
   defp map_path(value, [key | rest]) when is_map(value) do
@@ -747,10 +748,12 @@ defmodule SymphonyElixir.Codex.AppServer do
          payload,
          payload_string,
          method,
-         timeout_ms,
-         tool_executor,
-         auto_approve_requests,
-         turn_state
+         %{
+           timeout_ms: timeout_ms,
+           tool_executor: tool_executor,
+           auto_approve_requests: auto_approve_requests,
+           turn_state: turn_state
+         }
        ) do
     metadata = metadata_from_message(port, payload)
 
@@ -817,6 +820,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           )
 
           Logger.debug("Codex notification: #{inspect(method)}")
+
           receive_loop(
             port,
             on_message,
