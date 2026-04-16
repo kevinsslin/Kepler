@@ -55,11 +55,18 @@ defmodule SymphonyElixir.Kepler.Linear.Webhook do
 
   defp prompt_body("prompted", agent_session, data, payload) do
     agent_session["promptBody"] ||
-      get_in(payload, ["agentActivity", "body"]) ||
-      get_in(data, ["agentActivity", "body"]) ||
-      get_in(payload, ["prompt", "body"]) ||
-      get_in(data, ["prompt", "body"])
+      activity_body(Map.get(payload, "agentActivity")) ||
+      activity_body(Map.get(data, "agentActivity")) ||
+      activity_body(Map.get(payload, "prompt")) ||
+      activity_body(Map.get(data, "prompt"))
   end
 
   defp prompt_body(_action, _agent_session, _data, _payload), do: nil
+
+  defp activity_body(%{} = activity) do
+    activity["body"] ||
+      get_in(activity, ["content", "body"])
+  end
+
+  defp activity_body(_activity), do: nil
 end

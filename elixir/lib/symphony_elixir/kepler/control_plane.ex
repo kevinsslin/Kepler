@@ -178,6 +178,9 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     case run_id_for_session(state, event.agent_session_id) do
       nil ->
         case conflicting_issue_run(state, event.issue_id, event.agent_session_id) do
+          %Run{status: "awaiting_repository_choice"} = existing_run ->
+            continue_repository_choice_with_reconnected_session(state, existing_run, event)
+
           %Run{} = existing_run ->
             notify_issue_already_active(event.agent_session_id, existing_run)
             {:ok, state}
@@ -188,21 +191,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
       run_id ->
         run = Map.fetch!(state.runs, run_id)
-        prompt_body = event.prompt_body |> to_string() |> String.trim()
-
-        cond do
-          run.status == "awaiting_repository_choice" ->
-            resolve_repository_choice(state, run, prompt_body)
-
-          run.repository_id in [nil, ""] ->
-            {:ok, state}
-
-          prompt_body == "" ->
-            {:ok, state}
-
-          true ->
-            queue_follow_up_prompt(state, event.agent_session_id, run, prompt_body)
-        end
+        handle_prompt_for_run(state, run, event.agent_session_id, event.prompt_body)
     end
   end
 
@@ -337,6 +326,42 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
           )
 
         {:ok, state}
+    end
+  end
+
+  defp continue_repository_choice_with_reconnected_session(state, run, event) do
+    updated_run = Run.touch(run, %{linear_agent_session_id: event.agent_session_id})
+    updated_state = put_run(state, updated_run)
+
+    persist_webhook_state(state, updated_state, fn persisted_state ->
+      handle_prompt_for_run(
+        persisted_state,
+        updated_run,
+        event.agent_session_id,
+        event.prompt_body
+      )
+      |> case do
+        {:ok, next_state} -> next_state
+        {{:error, _reason}, next_state} -> next_state
+      end
+    end)
+  end
+
+  defp handle_prompt_for_run(state, run, agent_session_id, prompt_body) do
+    prompt_body = prompt_body |> to_string() |> String.trim()
+
+    cond do
+      run.status == "awaiting_repository_choice" ->
+        resolve_repository_choice(state, run, prompt_body)
+
+      run.repository_id in [nil, ""] ->
+        {:ok, state}
+
+      prompt_body == "" ->
+        {:ok, state}
+
+      true ->
+        queue_follow_up_prompt(state, agent_session_id, run, prompt_body)
     end
   end
 

@@ -46,6 +46,29 @@ defmodule SymphonyElixir.Kepler.Linear.WebhookTest do
             }} = Webhook.parse(payload)
   end
 
+  test "parses top-level agentSession prompted payloads with nested content bodies" do
+    payload = %{
+      "action" => "prompted",
+      "agentSession" => %{
+        "id" => "session-top-level-prompt",
+        "issue" => %{"id" => "issue-top-level-prompt"},
+        "promptContext" => "Prompt context"
+      },
+      "agentActivity" => %{
+        "content" => %{"body" => "frontend"}
+      }
+    }
+
+    assert {:ok,
+            %{
+              action: "prompted",
+              agent_session_id: "session-top-level-prompt",
+              issue_id: "issue-top-level-prompt",
+              prompt_context: "Prompt context",
+              prompt_body: "frontend"
+            }} = Webhook.parse(payload)
+  end
+
   test "rejects non-agent-session webhook payloads" do
     payload = %{
       "action" => "issueAssignedToYou",

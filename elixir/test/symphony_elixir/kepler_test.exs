@@ -291,6 +291,107 @@ defmodule SymphonyElixir.KeplerTest do
     end)
   end
 
+  test "prompted webhook accepts rendered repository choice lines" do
+    persistent_put(
+      {FakeLinearClient, :issue},
+      %SymphonyElixir.Kepler.Linear.IssueContext{
+        id: "issue-choice-line",
+        identifier: "KEP-77B",
+        title: "Ambiguous route line reply",
+        description: "Needs choice",
+        labels: ["unknown"],
+        team_key: "ENG",
+        project_slug: "kepler"
+      }
+    )
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "created",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-choice-line",
+                   "issue" => %{"id" => "issue-choice-line"}
+                 },
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    assert_receive {:activity, "session-choice-line", %{type: "elicitation", body: body}}
+    assert body =~ "Reply with one of"
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "prompted",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-choice-line",
+                   "issue" => %{"id" => "issue-choice-line"}
+                 },
+                 "prompt" => %{"body" => "`repo-web` (`example/repo-web`)"},
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    assert_eventually(fn ->
+      snapshot = ControlPlane.snapshot()
+      [%{status: "completed", repository_id: "repo-web"}] =
+        Enum.filter(snapshot.runs, &(&1.linear_issue_id == "issue-choice-line"))
+    end)
+  end
+
+  test "prompted webhook can resume repository choice from a reconnected session" do
+    persistent_put(
+      {FakeLinearClient, :issue},
+      %SymphonyElixir.Kepler.Linear.IssueContext{
+        id: "issue-reconnect",
+        identifier: "KEP-77C",
+        title: "Reconnect choice",
+        description: "Needs choice after reconnect",
+        labels: ["unknown"],
+        team_key: "ENG",
+        project_slug: "kepler"
+      }
+    )
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "created",
+               "data" => %{
+                 "agentSession" => %{
+                   "id" => "session-reconnect-old",
+                   "issue" => %{"id" => "issue-reconnect"}
+                 },
+                 "webhookTimestamp" => System.system_time(:millisecond)
+               }
+             })
+
+    assert_receive {:activity, "session-reconnect-old", %{type: "elicitation", body: body}}
+    assert body =~ "Reply with one of"
+
+    assert :ok =
+             ControlPlane.handle_webhook(%{
+               "action" => "prompted",
+               "agentSession" => %{
+                 "id" => "session-reconnect-new",
+                 "issue" => %{"id" => "issue-reconnect"}
+               },
+               "agentActivity" => %{"content" => %{"body" => "repo-web"}},
+               "webhookTimestamp" => System.system_time(:millisecond)
+             })
+
+    assert_receive {:activity, "session-reconnect-new", %{type: "thought", body: confirmed_body}}
+    assert confirmed_body =~ "Repository confirmed"
+    assert_receive {:runner_run, "repo-web", "session-reconnect-new", []}
+
+    assert_eventually(fn ->
+      snapshot = ControlPlane.snapshot()
+
+      [%{status: "completed", repository_id: "repo-web", linear_agent_session_id: "session-reconnect-new"}] =
+        Enum.filter(snapshot.runs, &(&1.linear_issue_id == "issue-reconnect"))
+    end)
+  end
+
   test "follow-up prompts received during execution queue another run and are applied once" do
     release_ref = make_ref()
 

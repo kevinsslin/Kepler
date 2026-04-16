@@ -43,17 +43,24 @@ defmodule SymphonyElixir.Kepler.Routing do
           [SymphonyElixir.Kepler.Config.Schema.Repository.t()]
         ) :: {:ok, SymphonyElixir.Kepler.Config.Schema.Repository.t()} | :error
   def resolve_human_choice(choice, repositories) when is_binary(choice) and is_list(repositories) do
-    normalized_choice = normalize_choice(choice)
-
     repositories
     |> Enum.find(fn repository ->
-      normalize_choice(repository.id) == normalized_choice or
-        normalize_choice(repository.full_name) == normalized_choice
+      candidate_choices(repository)
+      |> Enum.any?(&(normalize_choice(&1) == normalize_choice(choice)))
     end)
     |> case do
       nil -> :error
       repository -> {:ok, repository}
     end
+  end
+
+  defp candidate_choices(repository) do
+    [
+      repository.id,
+      repository.full_name,
+      "#{repository.id} (#{repository.full_name})",
+      "#{repository.id}(#{repository.full_name})"
+    ]
   end
 
   defp route_by_suggestions(repositories, issue, agent_session_id, linear_client) do
@@ -143,6 +150,9 @@ defmodule SymphonyElixir.Kepler.Routing do
   defp normalize_choice(value) when is_binary(value) do
     value
     |> String.trim()
+    |> String.replace(~r/^\s*[-*•]\s*/, "")
+    |> String.replace("`", "")
+    |> String.replace(~r/\s+/, " ")
     |> String.downcase()
   end
 end
