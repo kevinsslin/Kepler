@@ -17,6 +17,7 @@ defmodule SymphonyElixir.KeplerConfigTest do
     original_api_token = System.get_env("KEPLER_API_TOKEN")
     original_github_app_id = System.get_env("GITHUB_APP_ID")
     original_github_private_key = System.get_env("GITHUB_APP_PRIVATE_KEY")
+    original_home = System.get_env("HOME")
 
     on_exit(fn ->
       if is_nil(original_config_path),
@@ -34,6 +35,7 @@ defmodule SymphonyElixir.KeplerConfigTest do
       restore_env("KEPLER_API_TOKEN", original_api_token)
       restore_env("GITHUB_APP_ID", original_github_app_id)
       restore_env("GITHUB_APP_PRIVATE_KEY", original_github_private_key)
+      restore_env("HOME", original_home)
     end)
 
     :ok
@@ -305,6 +307,35 @@ defmodule SymphonyElixir.KeplerConfigTest do
 
     assert Enum.find(settings.repositories, &(&1.id == "web")).reference_repository_ids == ["api"]
     assert Enum.find(settings.repositories, &(&1.id == "worker")).reference_repository_ids == ["api", "events"]
+  end
+
+  test "expands embedded env vars inside workspace and state roots" do
+    fake_home = Path.join(System.tmp_dir!(), "kepler-home-#{System.unique_integer([:positive])}")
+
+    System.put_env("HOME", fake_home)
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+
+    assert {:ok, settings} =
+             Config.load_from_string("""
+             service_name: "Kepler"
+             linear:
+               api_key: "linear-token"
+               webhook_secret: "linear-secret"
+             github:
+               bot_name: "Kepler Bot"
+               bot_email: "kepler@example.com"
+             workspace:
+               root: "$HOME/.kepler/workspaces"
+             state:
+               root: "$HOME/.kepler/state"
+             repositories:
+               - id: "repo-api"
+                 full_name: "example/repo-api"
+                 clone_url: "https://github.com/example/repo-api.git"
+             """)
+
+    assert settings.workspace.root == Path.expand(Path.join(fake_home, ".kepler/workspaces"))
+    assert settings.state.root == Path.expand(Path.join(fake_home, ".kepler/state"))
   end
 
   test "rejects unknown reference repositories" do

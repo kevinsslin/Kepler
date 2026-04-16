@@ -5,6 +5,8 @@ defmodule SymphonyElixir.LogFile do
 
   require Logger
 
+  alias SymphonyElixir.RuntimeMode
+
   @handler_id :symphony_disk_log
   @default_log_relative_path "log/symphony.log"
   @default_max_bytes 10 * 1024 * 1024
@@ -40,7 +42,7 @@ defmodule SymphonyElixir.LogFile do
            disk_log_handler_config(expanded_path, max_bytes, max_files)
          ) do
       :ok ->
-        remove_default_console_handler()
+        maybe_remove_default_console_handler()
         :ok
 
       {:error, reason} ->
@@ -57,11 +59,32 @@ defmodule SymphonyElixir.LogFile do
     end
   end
 
+  defp maybe_remove_default_console_handler do
+    if keep_console_logs?() do
+      :ok
+    else
+      remove_default_console_handler()
+    end
+  end
+
   defp remove_default_console_handler do
     case :logger.remove_handler(:default) do
       :ok -> :ok
       {:error, {:not_found, :default}} -> :ok
       {:error, _reason} -> :ok
+    end
+  end
+
+  defp keep_console_logs? do
+    case Application.get_env(:symphony_elixir, :keep_console_logs) do
+      true ->
+        true
+
+      false ->
+        false
+
+      _ ->
+        RuntimeMode.kepler?()
     end
   end
 

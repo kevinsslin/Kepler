@@ -514,7 +514,7 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
   defp normalize_path_token(value) when is_binary(value) do
     case env_reference_name(value) do
       {:ok, env_name} -> resolve_env_token(env_name)
-      :error -> value
+      :error -> expand_embedded_env_tokens(value)
     end
   end
 
@@ -533,6 +533,20 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
       nil -> :missing
       env_value -> env_value
     end
+  end
+
+  defp expand_embedded_env_tokens(value) when is_binary(value) do
+    Regex.replace(~r/\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/, value, fn
+      full_match, braced_name, bare_name ->
+        env_name =
+          case {braced_name, bare_name} do
+            {"", name} -> name
+            {name, ""} -> name
+            {name, _other} when is_binary(name) -> name
+          end
+
+        System.get_env(env_name) || full_match
+    end)
   end
 
   defp normalize_secret_value(value) when is_binary(value) do
