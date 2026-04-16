@@ -118,6 +118,26 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
     end
   end
 
+  defmodule Codex do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+
+    embedded_schema do
+      field(:thread_sandbox, :string, default: "danger-full-access")
+      field(:turn_sandbox_policy, :map, default: %{"type" => "dangerFullAccess"})
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:thread_sandbox, :turn_sandbox_policy], empty_values: [])
+      |> validate_required([:thread_sandbox, :turn_sandbox_policy])
+    end
+  end
+
   @spec linear_auth_mode(Linear.t()) :: linear_auth_mode()
   def linear_auth_mode(%Linear{} = linear) do
     cond do
@@ -280,6 +300,7 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
     embeds_one(:linear, Linear, on_replace: :update, defaults_to_struct: true)
     embeds_one(:github, GitHub, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
     embeds_one(:state, State, on_replace: :update, defaults_to_struct: true)
     embeds_one(:limits, Limits, on_replace: :update, defaults_to_struct: true)
@@ -312,6 +333,7 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
     |> cast_embed(:server, with: &Server.changeset/2)
     |> cast_embed(:linear, with: &Linear.changeset/2)
     |> cast_embed(:github, with: &GitHub.changeset/2)
+    |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
     |> cast_embed(:state, with: &State.changeset/2)
     |> cast_embed(:limits, with: &Limits.changeset/2)
@@ -385,11 +407,17 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
             )
       }
 
+      codex = %{
+        settings.codex
+        | turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
+      }
+
       {:ok,
        %{
          settings
          | server: server,
            github: github,
+           codex: codex,
            linear: linear,
            workspace: workspace,
            state: state,
@@ -434,6 +462,9 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
 
   defp normalize_keys(value) when is_list(value), do: Enum.map(value, &normalize_keys/1)
   defp normalize_keys(value), do: value
+
+  defp normalize_optional_map(nil), do: nil
+  defp normalize_optional_map(value) when is_map(value), do: normalize_keys(value)
 
   defp normalize_key(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_key(value), do: to_string(value)

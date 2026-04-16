@@ -51,6 +51,8 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     refute resolved.workflow.prompt =~ "Fallback prompt"
     assert resolved.settings.workspace.root == Config.settings!().workspace.root
     assert resolved.settings.worker.ssh_hosts == []
+    assert resolved.settings.codex.thread_sandbox == "danger-full-access"
+    assert resolved.settings.codex.turn_sandbox_policy == %{"type" => "dangerFullAccess"}
   end
 
   test "configured fallback is used when repo-local workflow is missing", %{root: root} do
@@ -138,6 +140,23 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     assert workflow.prompt =~ "Do not create duplicate PRs"
   end
 
+  test "hosted codex sandbox overrides repo-local workflow sandbox settings", %{root: root} do
+    workspace = Path.join(root, "workspace")
+    repo_workflow_path = Path.join(workspace, "WORKFLOW.md")
+    config_path = Path.join(root, "kepler.yml")
+
+    File.mkdir_p!(workspace)
+    File.write!(repo_workflow_path, workflow_body("Repo-local prompt", sandbox: :workspace_write))
+    File.write!(config_path, kepler_config(nil, root))
+    Config.set_config_file_path(config_path)
+
+    assert {:ok, resolved} = WorkflowResolver.load(workspace, repository())
+
+    assert resolved.workflow_path == repo_workflow_path
+    assert resolved.settings.codex.thread_sandbox == "danger-full-access"
+    assert resolved.settings.codex.turn_sandbox_policy == %{"type" => "dangerFullAccess"}
+  end
+
   defp repository(opts \\ []) do
     %Repository{
       id: "repo-api",
@@ -192,17 +211,34 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     """
   end
 
-  defp workflow_body(prompt) do
-    """
-    ---
-    workspace:
-      root: "/tmp/repo-local-root"
-    worker:
-      ssh_hosts:
-        - "worker-a"
-    ---
-    #{prompt}
-    """
+  defp workflow_body(prompt, opts \\ []) do
+    sandbox_block =
+      case Keyword.get(opts, :sandbox) do
+        :workspace_write ->
+          """
+          codex:
+            thread_sandbox: "workspace-write"
+            turn_sandbox_policy:
+              type: workspaceWrite
+          """
+
+        _ ->
+          nil
+      end
+
+    [
+      "---",
+      "workspace:",
+      "  root: \"/tmp/repo-local-root\"",
+      "worker:",
+      "  ssh_hosts:",
+      "    - \"worker-a\"",
+      sandbox_block,
+      "---",
+      prompt
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("\n")
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)

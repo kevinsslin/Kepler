@@ -46,6 +46,14 @@ github:
   bot_name: "Kepler Bot"
   bot_email: "kepler-bot@users.noreply.github.com"
 
+codex:
+  # Hosted Kepler already runs inside your isolated container/VM.
+  # Keep Codex full-access inside that environment by default so nested Linux
+  # sandboxes do not block git/apply_patch/tool execution.
+  thread_sandbox: "danger-full-access"
+  turn_sandbox_policy:
+    type: dangerFullAccess
+
 workspace:
   root: $KEPLER_WORKSPACE_ROOT # required persistent writable path
 

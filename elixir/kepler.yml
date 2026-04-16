@@ -44,6 +44,14 @@ github:
   bot_name: "Kepler Bot"
   bot_email: "kepler-bot@users.noreply.github.com"
 
+codex:
+  # Hosted Kepler runs inside an already isolated container/VM.
+  # Use full access inside that workspace by default so nested Linux sandboxes
+  # do not break git/apply_patch/tool execution on platforms like Railway.
+  thread_sandbox: "danger-full-access"
+  turn_sandbox_policy:
+    type: dangerFullAccess
+
 workspace:
   root: $KEPLER_WORKSPACE_ROOT
 

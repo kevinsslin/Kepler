@@ -16,9 +16,9 @@ agent:
 codex:
   command: "$CODEX_BIN --config model_reasoning_effort=high --model gpt-5.4 app-server"
   approval_policy: never
-  thread_sandbox: workspace-write
+  thread_sandbox: danger-full-access
   turn_sandbox_policy:
-    type: workspaceWrite
+    type: dangerFullAccess
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`.

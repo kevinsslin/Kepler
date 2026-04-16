@@ -37,12 +37,19 @@ defmodule SymphonyElixir.Kepler.WorkflowResolver do
   end
 
   defp normalize_settings(settings) do
-    workspace_root = Config.settings!().workspace.root
+    kepler_settings = Config.settings!()
+    workspace_root = kepler_settings.workspace.root
+    hosted_codex = kepler_settings.codex
 
     %{
       settings
       | workspace: %{settings.workspace | root: workspace_root},
-        worker: %{settings.worker | ssh_hosts: []}
+        worker: %{settings.worker | ssh_hosts: []},
+        codex: %{
+          settings.codex
+          | thread_sandbox: hosted_codex.thread_sandbox,
+            turn_sandbox_policy: hosted_codex.turn_sandbox_policy
+        }
     }
   end
 end

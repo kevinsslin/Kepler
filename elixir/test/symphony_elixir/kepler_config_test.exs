@@ -85,6 +85,30 @@ defmodule SymphonyElixir.KeplerConfigTest do
     assert settings.linear.blocked_state_name == "Blocked 受阻"
   end
 
+  test "defaults hosted codex sandbox settings to danger full access" do
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+
+    assert {:ok, settings} = Config.load_from_string(base_config())
+
+    assert settings.codex.thread_sandbox == "danger-full-access"
+    assert settings.codex.turn_sandbox_policy == %{"type" => "dangerFullAccess"}
+  end
+
+  test "accepts explicit hosted codex sandbox overrides" do
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+
+    assert {:ok, settings} =
+             Config.load_from_string(
+               base_config(
+                 codex_thread_sandbox: "\"read-only\"",
+                 codex_turn_sandbox_policy: ~s({"type": "readOnly", "networkAccess": true})
+               )
+             )
+
+    assert settings.codex.thread_sandbox == "read-only"
+    assert settings.codex.turn_sandbox_policy == %{"type" => "readOnly", "networkAccess" => true}
+  end
+
   test "resolves Linear client credentials from environment variables" do
     client_id_env = "KEPLER_LINEAR_CLIENT_ID_#{System.unique_integer([:positive])}"
     client_secret_env = "KEPLER_LINEAR_CLIENT_SECRET_#{System.unique_integer([:positive])}"
@@ -409,6 +433,8 @@ defmodule SymphonyElixir.KeplerConfigTest do
     blocked_state_name = Keyword.get(opts, :blocked_state_name)
     fallback_workflow_path = Keyword.get(opts, :fallback_workflow_path)
     server_api_token = Keyword.get(opts, :server_api_token)
+    codex_thread_sandbox = Keyword.get(opts, :codex_thread_sandbox)
+    codex_turn_sandbox_policy = Keyword.get(opts, :codex_turn_sandbox_policy)
 
     webhook_path_line =
       case Keyword.fetch(opts, :webhook_path) do
@@ -445,6 +471,20 @@ defmodule SymphonyElixir.KeplerConfigTest do
         lines -> "\n" <> Enum.join(lines, "\n")
       end
 
+    codex_lines =
+      [
+        {:thread_sandbox, codex_thread_sandbox},
+        {:turn_sandbox_policy, codex_turn_sandbox_policy}
+      ]
+      |> Enum.flat_map(fn
+        {_key, nil} -> []
+        {key, value} -> ["  #{key}: #{value}"]
+      end)
+      |> case do
+        [] -> ""
+        lines -> "\ncodex:\n" <> Enum.join(lines, "\n")
+      end
+
     """
     service_name: "Kepler"
     #{server_block}linear:
@@ -455,6 +495,7 @@ defmodule SymphonyElixir.KeplerConfigTest do
     github:
       bot_name: "Kepler Bot"
       bot_email: "kepler@example.com"
+    #{codex_lines}
     #{fallback_workflow_path_line}
     repositories:
       - id: "repo-api"
