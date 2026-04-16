@@ -64,6 +64,11 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     state = load_state(settings)
     state = recover_interrupted_runs(state)
     state = schedule_dispatch(state, 0)
+    Logger.info(
+      "Kepler control plane ready repositories=#{length(settings.repositories)} " <>
+        "auth_mode=#{inspect(SymphonyElixir.Kepler.Config.Schema.linear_auth_mode(settings.linear))} " <>
+        "max_concurrent_runs=#{settings.limits.max_concurrent_runs}"
+    )
     {:ok, state}
   end
 

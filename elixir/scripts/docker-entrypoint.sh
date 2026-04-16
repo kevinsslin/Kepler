@@ -52,5 +52,9 @@ if [ "$CODEX_COMMAND" = "codex" ] || [ "$(basename "$CODEX_COMMAND")" = "codex" 
   fi
 fi
 
+echo "Starting Kepler with config $CONFIG_PATH on port $PORT_VALUE" >&2
+echo "Kepler workspace root: $KEPLER_WORKSPACE_ROOT" >&2
+echo "Kepler state root: $KEPLER_STATE_ROOT" >&2
+
 cd "$APP_ROOT"
 exec ./scripts/run-kepler.sh --port "$PORT_VALUE"

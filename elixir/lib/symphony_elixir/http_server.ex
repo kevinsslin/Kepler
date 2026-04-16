@@ -3,6 +3,8 @@ defmodule SymphonyElixir.HttpServer do
   Compatibility facade that starts the Phoenix observability endpoint when enabled.
   """
 
+  require Logger
+
   alias SymphonyElixir.{Config, Orchestrator, RuntimeMode}
   alias SymphonyElixir.Kepler.Config, as: KeplerConfig
   alias SymphonyElixir.Kepler.ControlPlane
@@ -27,6 +29,8 @@ defmodule SymphonyElixir.HttpServer do
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
         with {:ok, ip} <- parse_host(host) do
+          Logger.info("Starting #{RuntimeMode.current()} HTTP server on #{normalize_host(host)}:#{port}")
+
           endpoint_opts = [
             server: true,
             http: [ip: ip, port: port],
@@ -42,7 +46,15 @@ defmodule SymphonyElixir.HttpServer do
             |> Keyword.merge(endpoint_opts)
 
           Application.put_env(:symphony_elixir, Endpoint, endpoint_config)
-          Endpoint.start_link()
+
+          case Endpoint.start_link() do
+            {:ok, pid} = result ->
+              Logger.info("HTTP endpoint ready on #{normalize_host(host)}:#{port} pid=#{inspect(pid)}")
+              result
+
+            other ->
+              other
+          end
         end
 
       _ ->
