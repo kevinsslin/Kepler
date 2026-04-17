@@ -25,7 +25,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       :settings,
       :dispatch_timer_ref,
       runs: %{},
-      issue_worklog_comment_ids: %{},
       queued_run_ids: [],
       active_run_ids: [],
       task_refs: %{}
@@ -443,7 +442,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
       %Run{} = run ->
         final_status =
-          if status in ["completed", "failed", "cancelled", "needs_input", "repository_clarification"] and
+          if status in ["completed", "failed", "cancelled"] and
                run.follow_up_prompts != [] do
             "queued"
           else
@@ -483,35 +482,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     maybe_transition_issue_state_for_completed_run(run)
   end
 
-  defp maybe_emit_terminal_activity(%Run{status: "needs_input"} = run) do
-    _ =
-      linear_client_module().create_agent_activity(
-        run.linear_agent_session_id,
-        response(needs_input_response_body(run))
-      )
-
-    maybe_transition_issue_state(run, blocked_state_name())
-  end
-
-  defp maybe_emit_terminal_activity(%Run{status: "repository_clarification"} = run) do
-    activity =
-      case repository_candidates_for_run(run) do
-        [] ->
-          response(needs_input_response_body(run))
-
-        repositories ->
-          elicitation(repositories, repository_clarification_reason(run))
-      end
-
-    _ =
-      linear_client_module().create_agent_activity(
-        run.linear_agent_session_id,
-        activity
-      )
-
-    maybe_transition_issue_state(run, blocked_state_name())
-  end
-
   defp maybe_emit_terminal_activity(%Run{status: "failed"} = run) do
     _ =
       linear_client_module().create_agent_activity(
@@ -537,69 +507,33 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
   defp completed_response_body(_run), do: "Run completed."
 
-  defp failed_response_body(%Run{
-         last_error: last_error,
-         final_agent_message: final_agent_message,
-         summary: summary
-       })
-       when is_binary(last_error) and last_error != "" and
-              is_binary(final_agent_message) and final_agent_message != "" and
-              is_binary(summary) and summary != "" do
-    """
-    Run failed: #{last_error}
+  defp failed_response_body(%Run{} = run) do
+    parts =
+      [
+        failed_lead(run.last_error),
+        final_codex_response_block(run.final_agent_message),
+        present_text(run.summary)
+      ]
+      |> Enum.reject(&is_nil/1)
 
-    Final Codex response:
-
-    #{final_agent_message}
-
-    #{summary}
-    """
-    |> String.trim()
+    case parts do
+      [] -> "Run failed."
+      _ -> parts |> Enum.join("\n\n") |> String.trim()
+    end
   end
 
-  defp failed_response_body(%Run{last_error: last_error, summary: summary})
-       when is_binary(last_error) and last_error != "" and is_binary(summary) and summary != "" do
-    """
-    Run failed: #{last_error}
-
-    #{summary}
-    """
-    |> String.trim()
-  end
-
-  defp failed_response_body(%Run{
-         last_error: last_error,
-         final_agent_message: final_agent_message
-       })
-       when is_binary(last_error) and last_error != "" and
-              is_binary(final_agent_message) and final_agent_message != "" do
-    """
-    Run failed: #{last_error}
-
-    Final Codex response:
-
-    #{final_agent_message}
-    """
-    |> String.trim()
-  end
-
-  defp failed_response_body(%Run{last_error: last_error}) when is_binary(last_error) and last_error != "",
+  defp failed_lead(last_error) when is_binary(last_error) and last_error != "",
     do: "Run failed: #{last_error}"
 
-  defp failed_response_body(%Run{summary: summary}) when is_binary(summary) and summary != "",
-    do: summary
+  defp failed_lead(_), do: nil
 
-  defp failed_response_body(_run), do: "Run failed."
+  defp final_codex_response_block(message) when is_binary(message) and message != "",
+    do: "Final Codex response:\n\n#{message}"
 
-  defp needs_input_response_body(%Run{final_agent_message: body})
-       when is_binary(body) and body != "" do
-    body
-  end
+  defp final_codex_response_block(_), do: nil
 
-  defp needs_input_response_body(%Run{last_error: last_error}) when is_binary(last_error) and last_error != "",
-    do: last_error
-
-  defp needs_input_response_body(_run), do: "Kepler needs more input before it can open a pull request."
+  defp present_text(value) when is_binary(value) and value != "", do: value
+  defp present_text(_), do: nil
 
   defp maybe_clear_summary(attrs, "queued"), do: Map.put(attrs, :summary, nil)
   defp maybe_clear_summary(attrs, _status), do: attrs
@@ -628,20 +562,12 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   end
 
   defp classify_terminal_result(result) do
-    final_message = codex_final_message(result)
-
-    cond do
-      is_binary(Map.get(result, :pr_url)) and Map.get(result, :pr_url) != "" ->
+    case Map.get(result, :pr_url) do
+      pr_url when is_binary(pr_url) and pr_url != "" ->
         {:completed, nil}
 
-      repository_clarification_message?(final_message) ->
-        {:repository_clarification, normalize_terminal_reason(final_message)}
-
-      needs_input_message?(final_message) ->
-        {:needs_input, normalize_terminal_reason(final_message)}
-
-      true ->
-        {:failed, "Run finished without opening a pull request. Kepler requires a PR for every ticket unless it explicitly asks for more input or repository clarification."}
+      _ ->
+        {:failed, "Run finished without opening a pull request. Kepler requires a PR for every ticket."}
     end
   end
 
@@ -650,56 +576,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       %{} = codex_result -> Map.get(codex_result, key) || Map.get(codex_result, Atom.to_string(key))
       _ -> nil
     end
-  end
-
-  defp codex_final_message(result) do
-    case codex_result_field(result, :final_agent_message) do
-      value when is_binary(value) and value != "" -> String.trim(value)
-      _ -> nil
-    end
-  end
-
-  defp normalize_terminal_reason(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> case do
-      "" -> "Kepler requires more input before it can open a pull request."
-      trimmed -> trimmed
-    end
-  end
-
-  defp repository_clarification_message?(nil), do: false
-
-  defp repository_clarification_message?(message) do
-    normalized = String.downcase(message)
-
-    String.contains?(normalized, [
-      "repository ids",
-      "repository id",
-      "full names listed above",
-      "which repository",
-      "reply with one of",
-      "selected repository"
-    ])
-  end
-
-  defp needs_input_message?(nil), do: false
-
-  defp needs_input_message?(message) do
-    normalized = String.downcase(message)
-
-    String.contains?(normalized, [
-      "need more information",
-      "need more info",
-      "need additional context",
-      "not enough information",
-      "don't have enough context",
-      "do not have enough context",
-      "please provide",
-      "cannot determine",
-      "can't determine",
-      "unclear from the issue"
-    ])
   end
 
   defp handle_run_down(state, task_refs, run_id, reason) do
@@ -747,13 +623,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   defp conflicting_issue_run(_state, _issue_id, _agent_session_id), do: nil
 
   defp worklog_comment_id_for_issue(state, issue_id) when is_binary(issue_id) and issue_id != "" do
-    Map.get(state.issue_worklog_comment_ids, issue_id) ||
-      latest_worklog_comment_id_for_issue(state, issue_id)
-  end
-
-  defp worklog_comment_id_for_issue(_state, _issue_id), do: nil
-
-  defp latest_worklog_comment_id_for_issue(state, issue_id) when is_binary(issue_id) and issue_id != "" do
     state.runs
     |> Map.values()
     |> Enum.filter(fn run ->
@@ -766,7 +635,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     end
   end
 
-  defp latest_worklog_comment_id_for_issue(_state, _issue_id), do: nil
+  defp worklog_comment_id_for_issue(_state, _issue_id), do: nil
 
   defp attach_worklog_comment_reference(state, %Run{} = run) do
     case {run.worklog_comment_id, worklog_comment_id_for_issue(state, run.linear_issue_id)} do
@@ -780,13 +649,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         run
     end
   end
-
-  defp put_issue_worklog_comment_id(state, issue_id, comment_id)
-       when is_binary(issue_id) and issue_id != "" and is_binary(comment_id) and comment_id != "" do
-    %{state | issue_worklog_comment_ids: Map.put(state.issue_worklog_comment_ids, issue_id, comment_id)}
-  end
-
-  defp put_issue_worklog_comment_id(state, _issue_id, _comment_id), do: state
 
   defp maybe_create_run_from_issue(state, event, issue, linear_client) do
     case conflicting_issue_run(state, issue.id, event.agent_session_id) do
@@ -884,7 +746,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       |> Run.touch(%{
         follow_up_prompts: run.follow_up_prompts ++ [prompt_body],
         status:
-          if(run.status in ["completed", "failed", "cancelled", "needs_input", "repository_clarification"],
+          if(run.status in ["completed", "failed", "cancelled"],
             do: "queued",
             else: run.status
           )
@@ -1024,7 +886,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         updated_state =
           state
           |> put_run(updated_run)
-          |> put_issue_worklog_comment_id(run.linear_issue_id, comment_id)
           |> persist_state()
 
         {updated_state, updated_run}
@@ -1107,7 +968,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         |> Enum.reject(&blank_worklog_text?/1)
         |> render_terminal_details()
 
-      run.status in ["failed", "needs_input", "repository_clarification"] ->
+      run.status == "failed" ->
         [run_terminal_error(run), run_terminal_summary(run)]
         |> Enum.reject(&blank_worklog_text?/1)
         |> render_terminal_details()
@@ -1120,10 +981,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   defp render_terminal_details([]), do: nil
   defp render_terminal_details(details), do: Enum.join(["### Kepler Result", "" | details], "\n")
 
-  defp run_terminal_error(%Run{status: status} = run)
-       when status in ["failed", "needs_input", "repository_clarification"] do
-    run.last_error
-  end
+  defp run_terminal_error(%Run{status: "failed"} = run), do: run.last_error
 
   defp run_terminal_error(_run), do: nil
 
@@ -1193,15 +1051,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   defp repository_label(nil, fallback) when is_binary(fallback), do: fallback
   defp repository_label(nil, _fallback), do: "unknown"
   defp repository_label(repository, _fallback), do: repository.full_name
-
-  defp repository_candidates_for_run(%Run{} = run) do
-    Config.settings!().repositories
-    |> Enum.filter(&(&1.id in run.repository_candidates))
-  end
-
-  defp repository_clarification_reason(%Run{} = run) do
-    run.last_error || "Please reply with one of the repository ids or full names listed above."
-  end
 
   defp reference_repositories_label([]), do: "_none_"
 
@@ -1397,7 +1246,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
         %State{
           settings: settings,
           runs: StateStore.decode_runs(payload),
-          issue_worklog_comment_ids: Map.get(payload, "issue_worklog_comment_ids", %{}),
           queued_run_ids: Map.get(payload, "queued_run_ids", []),
           active_run_ids: Map.get(payload, "active_run_ids", []),
           task_refs: %{}
@@ -1497,7 +1345,6 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
 
     payload = %{
       "runs" => StateStore.encode_runs(state_to_persist.runs),
-      "issue_worklog_comment_ids" => state_to_persist.issue_worklog_comment_ids,
       "queued_run_ids" => state_to_persist.queued_run_ids,
       "active_run_ids" => state_to_persist.active_run_ids
     }
@@ -1545,7 +1392,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   end
 
   defp terminal_run?(%Run{status: status}) do
-    status in ["completed", "failed", "cancelled", "interrupted", "needs_input", "repository_clarification"]
+    status in ["completed", "failed", "cancelled", "interrupted"]
   end
 
   defp retained_terminal_run_limit do

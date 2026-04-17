@@ -1029,54 +1029,6 @@ defmodule SymphonyElixir.KeplerTest do
     assert finished_comment =~ "Pull request: attached to the issue"
   end
 
-  test "no-pr runs that explicitly ask for more input are classified separately" do
-    persistent_put(
-      {FakeLinearClient, :issue},
-      %SymphonyElixir.Kepler.Linear.IssueContext{
-        id: "issue-needs-input",
-        identifier: "KEP-INPUT",
-        title: "Need more input",
-        description: "Should ask for clarification instead of silently succeeding",
-        labels: ["api"],
-        team_key: "ENG",
-        project_slug: "kepler"
-      }
-    )
-
-    persistent_put({FakeRunner, :result}, %{
-      branch: "kepler/KEP-INPUT",
-      codex_result: %{
-        final_agent_message: "I need more information about the expected frontend behavior before I can implement this change and open a pull request."
-      },
-      github_installation_id: 99,
-      pr_url: nil,
-      summary: "Current branch: `kepler/KEP-INPUT`.\n\nNo pull request URL was detected.\n\nWorkspace is clean after execution.",
-      workspace_path: "/tmp/repo-api"
-    })
-
-    assert :ok =
-             ControlPlane.handle_webhook(%{
-               "action" => "created",
-               "data" => %{
-                 "agentSession" => %{
-                   "id" => "session-needs-input",
-                   "issue" => %{"id" => "issue-needs-input"}
-                 },
-                 "webhookTimestamp" => System.system_time(:millisecond)
-               }
-             })
-
-    assert_receive {:issue_state_update, "issue-needs-input", "In Progress"}
-    assert_receive {:issue_state_update, "issue-needs-input", "Blocked"}
-    assert_receive {:activity, "session-needs-input", %{type: "response", body: body}}
-    assert body =~ "need more information"
-
-    assert_eventually(fn ->
-      snapshot = ControlPlane.snapshot()
-      [%{status: "needs_input"}] = Enum.filter(snapshot.runs, &(&1.linear_issue_id == "issue-needs-input"))
-    end)
-  end
-
   test "rejected second sessions get the existing PR backlink when the active run already has one" do
     existing_run_id = "run-existing-pr"
 
