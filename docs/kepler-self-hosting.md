@@ -634,6 +634,29 @@ Operational boundary:
 5. Confirm Kepler creates or refreshes the expected workspace.
 6. Confirm Kepler opens a PR or reports a visible failure into the same agent session.
 
+## Frontend Evidence Gists
+
+Codex sessions upload frontend screenshot evidence as private gists on the
+GitHub App's bot account. Each gist description is prefixed with
+`[kepler-evidence] <issue-identifier>` so operators can audit and prune.
+
+**Known tradeoff — manual cleanup.** Kepler does not currently delete these
+gists automatically; they accumulate on the bot account over time. The
+designated responsible operator for Kepler hosted should sweep aged evidence
+periodically (for example monthly) with:
+
+```sh
+# list all kepler-evidence gists older than 30 days under the current GH_TOKEN
+gh api /gists --paginate \
+  --jq '.[] | select(.description | startswith("[kepler-evidence]")) | select(.updated_at < (now - 2592000 | todate)) | .id' \
+  | xargs -I {} gh api --method DELETE /gists/{}
+```
+
+Run this as the bot account identity (or with a token authorised for the bot
+account). Evidence is referenced from PR descriptions via
+`gist.githubusercontent.com` raw URLs — deleting old gists will blank those
+images in old PRs, so only sweep when that is acceptable.
+
 ## Failure Modes
 
 - Missing or wrong `LINEAR_WEBHOOK_SECRET`: webhook requests fail with `401`.

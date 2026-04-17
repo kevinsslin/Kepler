@@ -50,7 +50,7 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     assert resolved.workflow.prompt =~ "Repo-local prompt"
     refute resolved.workflow.prompt =~ "Fallback prompt"
     assert resolved.workflow.prompt =~ "All outward-facing artifacts for this run must be written in English"
-    assert resolved.workflow.prompt =~ "Do not paste raw local filesystem paths for screenshot evidence"
+    assert resolved.workflow.prompt =~ "Do not commit screenshot or other binary evidence files"
     assert resolved.settings.workspace.root == Config.settings!().workspace.root
     assert resolved.settings.worker.ssh_hosts == []
     assert resolved.settings.codex.thread_sandbox == "danger-full-access"
@@ -155,8 +155,10 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
 
     assert resolved.workflow.prompt =~ "Hosted Kepler operator rules:"
     assert resolved.workflow.prompt =~ "All outward-facing artifacts for this run must be written in English"
-    assert resolved.workflow.prompt =~ "Do not paste raw local filesystem paths for screenshot evidence"
     assert resolved.workflow.prompt =~ "Do not include container hostnames"
+    assert resolved.workflow.prompt =~ "Do not commit screenshot or other binary evidence files"
+    assert resolved.workflow.prompt =~ "[kepler-evidence]"
+    assert resolved.workflow.prompt =~ "gh gist create"
   end
 
   test "hosted codex sandbox overrides repo-local workflow sandbox settings", %{root: root} do

@@ -14,8 +14,8 @@ defmodule SymphonyElixir.Kepler.WorkflowResolver do
   - `.kepler/workpad.md` is mirrored into a single persistent Linear issue comment. Keep it concise, reviewer-facing, and updated in place.
   - Do not keep a chronological diary or repeat micro-updates. Replace stale checklist items and notes in place instead of appending long narrative paragraphs.
   - Do not include container hostnames, internal workspace paths (e.g. `/data/workspaces/...`), or runtime identity markers in `.kepler/workpad.md`. The workpad is reviewer-facing; only include information a human PR reviewer can act on.
-  - Do not paste raw local filesystem paths for screenshot evidence into `.kepler/workpad.md`. Keep local screenshot paths in `.kepler/pr-report.json`; in the workpad, summarize the evidence briefly in English.
-  - Keep screenshot previews and renderable evidence in the pull request, not in the Linear workpad comment.
+  - Do not commit screenshot or other binary evidence files (`.png`, `.jpg`, `.gif`, `.webp`, etc.) to the issue branch. Upload screenshots with `gh gist create --public=false --desc "[kepler-evidence] <issue-identifier> <short-label>" <file>` using the `GH_TOKEN` already exported to the session; the `[kepler-evidence]` prefix is required so operators can bulk-delete aged evidence later. Reference the returned `gist.githubusercontent.com` raw URLs from `pr-report.json` only.
+  - Keep screenshot previews and renderable evidence in the pull request via the uploaded gist URLs, not in the Linear workpad comment.
   """
 
   @type resolved_workflow :: %{

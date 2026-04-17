@@ -133,10 +133,8 @@ Required workflow:
   "frontend_evidence": [
     {
       "label": "Changed screen or component",
-      "before_path": ".kepler/evidence/example-before.png",
-      "after_path": ".kepler/evidence/example-after.png",
-      "before_url": "https://example.com/example-before.png",
-      "after_url": "https://example.com/example-after.png",
+      "before_url": "https://gist.githubusercontent.com/<bot>/<gist-id>/raw/example-before.png",
+      "after_url": "https://gist.githubusercontent.com/<bot>/<gist-id>/raw/example-after.png",
       "note": "Optional context"
     }
   ],
@@ -148,8 +146,12 @@ Required workflow:
 ```
 
 2. For frontend screenshot evidence:
-   - Prefer `before_url` / `after_url` when you already have stable hosted artifact URLs.
-   - Otherwise use `before_path` / `after_path` with stable relative paths such as `.kepler/evidence/...` and make sure those assets exist, are committed on the issue branch, and are pushed before the run finishes so the PR body can render them from GitHub.
+   - Never commit screenshot files (`.png`, `.jpg`, `.gif`, `.webp`, etc.) to the issue branch. The product branch must stay free of per-run evidence binaries.
+   - Capture screenshots into a scratch location outside the repo (for example `/tmp/kepler-evidence/`). Do not stage them into git.
+   - Upload each screenshot with `gh gist create --public=false --desc "[kepler-evidence] <issue-identifier> <short-label>" <file>`. The runner image includes `gh` and `GH_TOKEN` is already exported. The `[kepler-evidence]` prefix is required so operators can bulk-clean old evidence later.
+   - Capture the returned gist URL and convert it to a raw URL of the form `https://gist.githubusercontent.com/<owner>/<gist-id>/raw/<filename>`.
+   - Use those raw gist URLs as the `before_url` / `after_url` values in `pr-report.json`. Do not emit `before_path` / `after_path` keys.
+   - If `gh gist create` fails, record the failure in the workpad blockers and stop — do not fall back to committing the files into the repo.
 3. For backend, worker, API, indexer, or smart-contract changes, include at least one validation entry whose `kind` is `test`, `integration`, `e2e`, or `contract` and whose `result` is a passing outcome.
 4. Mirror the final summary, acceptance criteria status, validation evidence, and blockers in `.kepler/workpad.md` so follow-up runs can resume cleanly.
 5. If you changed files, commit the work and push the issue branch before finishing. Use a concise commit message that references the ticket identifier.
