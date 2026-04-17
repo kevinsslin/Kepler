@@ -65,16 +65,12 @@ defmodule SymphonyElixir.Kepler.WorkflowResolver do
   end
 
   defp prepend_hosted_prompt_rules(%{prompt: prompt, prompt_template: prompt_template} = workflow) do
-    if String.contains?(prompt, "Hosted Kepler operator rules:") do
-      workflow
-    else
-      prefix = String.trim(@hosted_prompt_prefix)
+    prefix = String.trim(@hosted_prompt_prefix)
 
-      %{
-        workflow
-        | prompt: Enum.join([prefix, String.trim(prompt)], "\n\n"),
-          prompt_template: Enum.join([prefix, String.trim(prompt_template)], "\n\n")
-      }
-    end
+    %{
+      workflow
+      | prompt: Enum.join([prefix, String.trim(prompt)], "\n\n"),
+        prompt_template: Enum.join([prefix, String.trim(prompt_template)], "\n\n")
+    }
   end
 end

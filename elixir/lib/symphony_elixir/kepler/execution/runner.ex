@@ -323,33 +323,12 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     reference_path = reference_workspace_path(workspace_path, repository.id)
 
     with :ok <- set_reference_workspace_writable(reference_path),
-         {:ok, _created?} <- sync_repository_workspace(reference_path, repository, env),
+         {:ok, _created?} <- ensure_repository_workspace(reference_path, repository, env),
          :ok <- set_reference_workspace_read_only(reference_path) do
       :ok
     else
       {:error, reason} ->
         {:error, {:reference_repository_sync_failed, repository.id, reason}}
-    end
-  end
-
-  defp sync_repository_workspace(workspace_path, repository, env) do
-    if File.dir?(Path.join(workspace_path, ".git")) do
-      with :ok <- git(workspace_path, ["remote", "set-url", "origin", clone_url(repository)], env),
-           :ok <- git(workspace_path, ["fetch", "origin", repository.default_branch, "--prune"], env),
-           :ok <- git(workspace_path, ["checkout", repository.default_branch], env),
-           :ok <- git(workspace_path, ["reset", "--hard", "origin/#{repository.default_branch}"], env) do
-        {:ok, false}
-      end
-    else
-      parent = Path.dirname(workspace_path)
-      File.rm_rf!(workspace_path)
-      File.mkdir_p!(parent)
-      File.mkdir_p!(workspace_path)
-
-      with :ok <- git(workspace_path, ["clone", clone_url(repository), "."], env),
-           :ok <- git(workspace_path, ["checkout", repository.default_branch], env) do
-        {:ok, true}
-      end
     end
   end
 

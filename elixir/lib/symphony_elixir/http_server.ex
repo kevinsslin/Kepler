@@ -50,8 +50,6 @@ defmodule SymphonyElixir.HttpServer do
   end
 
   defp start_endpoint(host, ip, port, orchestrator, snapshot_timeout_ms) do
-    Logger.info("Starting #{RuntimeMode.current()} HTTP server on #{normalize_host(host)}:#{port}")
-
     endpoint_opts = [
       server: true,
       http: [ip: ip, port: port],

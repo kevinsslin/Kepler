@@ -48,12 +48,6 @@ Hosted execution contract:
 - If `.kepler/refs/` exists, those sibling checkouts are read-only context repositories. You may inspect them to understand upstream/downstream integrations, but never edit, commit, or open PRs from them.
 - The runner already synchronized the workspace to the repository's configured base branch before this turn started.
 - Kepler hosted mode is session-driven. Do not assume tracker polling, issue state transitions, or Linear comment editing are available inside the run.
-- All outward-facing artifacts for this run must be written in English, regardless of the issue language. This includes `.kepler/workpad.md`, `.kepler/pr-report.json` text fields, the final response, commit messages, and PR title/body text.
-- `.kepler/workpad.md` is mirrored into a single persistent Linear issue comment. Keep it concise, reviewer-facing, and updated in place.
-- Do not keep a chronological diary or repeat micro-updates. Replace stale checklist items and notes in place instead of appending long narrative paragraphs.
-- Do not include container hostnames, internal workspace paths (e.g. `/data/workspaces/...`), or runtime identity markers in `.kepler/workpad.md`. The workpad is reviewer-facing; only include information a human PR reviewer can act on.
-- Do not paste raw local filesystem paths for screenshot evidence into `.kepler/workpad.md`. Keep local screenshot paths in `.kepler/pr-report.json`; in the workpad, summarize the evidence briefly in English.
-- Keep screenshot previews and renderable evidence in the pull request, not in the Linear workpad comment.
 
 Operational files:
 

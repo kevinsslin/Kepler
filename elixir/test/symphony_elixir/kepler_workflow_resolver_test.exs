@@ -141,8 +141,22 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     assert workflow.prompt =~ "passing automated tests are mandatory"
     assert workflow.prompt =~ "commit the work and push the issue branch before finishing"
     assert workflow.prompt =~ "Do not create duplicate PRs"
-    assert workflow.prompt =~ "All outward-facing artifacts for this run must be written in English"
-    assert workflow.prompt =~ "Do not paste raw local filesystem paths for screenshot evidence"
+  end
+
+  test "resolver injects hosted operator rules into the loaded workflow", %{root: root} do
+    workspace = Path.join(root, "workspace")
+    config_path = Path.join(root, "kepler.yml")
+
+    File.mkdir_p!(workspace)
+    File.write!(config_path, kepler_config(nil, root))
+    Config.set_config_file_path(config_path)
+
+    assert {:ok, resolved} = WorkflowResolver.load(workspace, repository())
+
+    assert resolved.workflow.prompt =~ "Hosted Kepler operator rules:"
+    assert resolved.workflow.prompt =~ "All outward-facing artifacts for this run must be written in English"
+    assert resolved.workflow.prompt =~ "Do not paste raw local filesystem paths for screenshot evidence"
+    assert resolved.workflow.prompt =~ "Do not include container hostnames"
   end
 
   test "hosted codex sandbox overrides repo-local workflow sandbox settings", %{root: root} do
