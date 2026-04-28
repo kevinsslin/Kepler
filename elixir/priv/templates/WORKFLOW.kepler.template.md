@@ -14,7 +14,7 @@ agent:
   max_retry_backoff_ms: 300000
 
 codex:
-  command: "$CODEX_BIN --config model_reasoning_effort=high --model gpt-5.4 app-server"
+  command: "$CODEX_BIN --config 'model=\"gpt-5.5\"' --config model_reasoning_effort=high app-server"
   approval_policy: never
   thread_sandbox: danger-full-access
   turn_sandbox_policy:

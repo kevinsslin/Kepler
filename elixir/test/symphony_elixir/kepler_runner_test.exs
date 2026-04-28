@@ -146,7 +146,12 @@ defmodule SymphonyElixir.KeplerRunnerTest do
   end
 
   setup do
-    root = Path.join(System.tmp_dir!(), "kepler-runner-test-#{System.unique_integer([:positive])}")
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "kepler-runner-test-#{System.os_time(:nanosecond)}-#{System.unique_integer([:positive])}"
+      )
+
     config_path = Path.join(root, "kepler.yml")
     remote_api_path = Path.join(root, "remote-api.git")
     source_api_path = Path.join(root, "source-api")

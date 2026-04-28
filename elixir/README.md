@@ -433,6 +433,14 @@ You are working on a Linear issue {{ issue.identifier }}.
 The longer local workflow example is in [./WORKFLOW.md](./WORKFLOW.md). It encodes the legacy
 tracker-driven state machine and should not be confused with Kepler hosted mode.
 
+When pinning a Codex app-server model, pass it through Codex config rather than the root `--model`
+flag:
+
+```yaml
+codex:
+  command: "$CODEX_BIN --config 'model=\"gpt-5.5\"' app-server"
+```
+
 ## Development Checks
 
 ```bash

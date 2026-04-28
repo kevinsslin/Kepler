@@ -773,11 +773,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.codex.stall_timeout_ms == 300_000
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      codex_command: "codex --config model_reasoning_effort=high --model gpt-5.4 app-server"
+      codex_command: "codex --config 'model=\"gpt-5.5\"' app-server"
     )
 
     assert Config.settings!().codex.command ==
-             "codex --config model_reasoning_effort=high --model gpt-5.4 app-server"
+             "codex --config 'model=\"gpt-5.5\"' app-server"
 
     explicit_root =
       Path.join(

@@ -448,7 +448,7 @@ Kepler launches whatever command resolves from the repository workflow or fallba
 The bundled fallback command is:
 
 ```text
-$CODEX_BIN --config model_reasoning_effort=high --model gpt-5.4 app-server
+$CODEX_BIN --config 'model="gpt-5.5"' --config model_reasoning_effort=high app-server
 ```
 
 So either:
