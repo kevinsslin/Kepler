@@ -94,8 +94,9 @@ Kepler supports a shared hosted workflow plus repo-local overrides. If a target 
 provide `repository.workflow_path`, Kepler falls back to the bundled shared workflow at
 [elixir/priv/templates/WORKFLOW.kepler.template.md](elixir/priv/templates/WORKFLOW.kepler.template.md).
 That fallback requires `.kepler/pr-report.json`, frontend screenshot evidence for user-visible
-changes, and passing automated tests for backend or smart-contract changes. Repo-local overrides are
-allowed, but they must preserve the hosted PR handoff contract.
+changes, passing automated tests for backend or smart-contract changes, and a pre-flight audit of
+repo state, Linear status, tool/auth availability, and existing PR feedback. Repo-local overrides
+are allowed, but they must preserve the hosted PR handoff contract.
 
 ## Documentation Map
 

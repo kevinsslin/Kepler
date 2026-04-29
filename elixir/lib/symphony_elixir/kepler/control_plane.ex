@@ -16,6 +16,7 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   alias SymphonyElixir.Kepler.StateStore
 
   @default_retained_terminal_runs 200
+  @default_worklog_sync_debounce_ms 25
 
   defmodule State do
     @moduledoc false
@@ -26,7 +27,10 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       runs: %{},
       queued_run_ids: [],
       active_run_ids: [],
-      task_refs: %{}
+      task_refs: %{},
+      worklog_timer_refs: %{},
+      worklog_syncing_run_ids: MapSet.new(),
+      pending_worklog_sync_run_ids: MapSet.new()
     ]
   end
 
@@ -134,6 +138,19 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
       {run_id, task_refs} ->
         {:noreply, handle_run_down(state, task_refs, run_id, reason)}
     end
+  end
+
+  def handle_info({:sync_worklog, run_id}, state) do
+    state =
+      state
+      |> clear_worklog_timer(run_id)
+      |> launch_worklog_sync(run_id)
+
+    {:noreply, state}
+  end
+
+  def handle_info({:worklog_sync_finished, run_id, result}, state) do
+    {:noreply, handle_worklog_sync_result(state, run_id, result)}
   end
 
   def handle_info(_message, state), do: {:noreply, state}
@@ -843,37 +860,119 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
     force? = Keyword.get(opts, :force, false)
     refresh? = Keyword.get(opts, :refresh, false)
     run = attach_worklog_comment_reference(state, run)
+    state = put_run(state, run)
 
     cond do
       run.worklog_comment_id && (force? || refresh?) ->
-        update_worklog_comment(state, run)
+        {schedule_worklog_sync(state, run.id, force?), run}
 
       blank_worklog_text?(run.worklog_comment_id) and should_create_worklog_comment?(run, force?) ->
-        create_worklog_comment(state, run)
+        {schedule_worklog_sync(state, run.id, force?), run}
 
       true ->
         {state, run}
     end
   end
 
-  defp update_worklog_comment(state, %Run{} = run) do
-    body = worklog_comment_body(state, run)
+  defp schedule_worklog_sync(state, run_id, force?) do
+    delay_ms = if force?, do: 0, else: worklog_sync_debounce_ms()
 
-    case linear_client_module().update_issue_comment(run.worklog_comment_id, body) do
-      :ok ->
-        {state, run}
+    state = cancel_worklog_timer(state, run_id)
+    timer_ref = Process.send_after(self(), {:sync_worklog, run_id}, delay_ms)
 
-      {:error, reason} ->
-        Logger.warning("Failed to update Linear worklog comment for Kepler run #{run.id}: #{inspect(reason)}")
-        {state, run}
+    %{state | worklog_timer_refs: Map.put(state.worklog_timer_refs, run_id, timer_ref)}
+  end
+
+  defp cancel_worklog_timer(state, run_id) do
+    case Map.pop(state.worklog_timer_refs, run_id) do
+      {nil, _timer_refs} ->
+        state
+
+      {timer_ref, timer_refs} ->
+        _ = Process.cancel_timer(timer_ref)
+        %{state | worklog_timer_refs: timer_refs}
     end
   end
 
-  defp create_worklog_comment(state, %Run{} = run) do
+  defp clear_worklog_timer(state, run_id) do
+    %{state | worklog_timer_refs: Map.delete(state.worklog_timer_refs, run_id)}
+  end
+
+  defp launch_worklog_sync(state, run_id) do
+    cond do
+      MapSet.member?(state.worklog_syncing_run_ids, run_id) ->
+        mark_worklog_sync_pending(state, run_id)
+
+      run = Map.get(state.runs, run_id) ->
+        start_worklog_sync_task(state, run_id, run)
+
+      true ->
+        state
+    end
+  end
+
+  defp mark_worklog_sync_pending(state, run_id) do
+    %{
+      state
+      | pending_worklog_sync_run_ids: MapSet.put(state.pending_worklog_sync_run_ids, run_id)
+    }
+  end
+
+  defp start_worklog_sync_task(state, run_id, run) do
+    parent = self()
     body = worklog_comment_body(state, run)
 
+    case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+           send(parent, {:worklog_sync_finished, run_id, perform_worklog_sync(run, body)})
+         end) do
+      {:ok, _pid} ->
+        %{state | worklog_syncing_run_ids: MapSet.put(state.worklog_syncing_run_ids, run_id)}
+
+      {:error, reason} ->
+        Logger.warning("Failed to start Linear worklog sync for Kepler run #{run_id}: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp perform_worklog_sync(%Run{worklog_comment_id: comment_id}, body)
+       when is_binary(comment_id) and comment_id != "" do
+    case linear_client_module().update_issue_comment(comment_id, body) do
+      :ok -> {:ok, :updated}
+      {:error, reason} -> {:error, {:update, reason}}
+    end
+  end
+
+  defp perform_worklog_sync(%Run{} = run, body) do
     case linear_client_module().create_issue_comment(run.linear_issue_id, body) do
       {:ok, comment_id} ->
+        {:ok, {:created, comment_id}}
+
+      {:error, reason} ->
+        {:error, {:create, reason}}
+    end
+  end
+
+  defp handle_worklog_sync_result(state, run_id, result) do
+    state =
+      %{state | worklog_syncing_run_ids: MapSet.delete(state.worklog_syncing_run_ids, run_id)}
+      |> maybe_apply_worklog_sync_result(run_id, result)
+
+    if MapSet.member?(state.pending_worklog_sync_run_ids, run_id) do
+      %{
+        state
+        | pending_worklog_sync_run_ids: MapSet.delete(state.pending_worklog_sync_run_ids, run_id)
+      }
+      |> schedule_worklog_sync(run_id, true)
+    else
+      state
+    end
+  end
+
+  defp maybe_apply_worklog_sync_result(state, run_id, {:ok, {:created, comment_id}})
+       when is_binary(comment_id) and comment_id != "" do
+    case Map.get(state.runs, run_id) do
+      %Run{worklog_comment_id: existing_comment_id} = run
+      when existing_comment_id in [nil, ""] ->
         updated_run = Run.touch(run, %{worklog_comment_id: comment_id})
 
         updated_state =
@@ -881,12 +980,28 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
           |> put_run(updated_run)
           |> persist_state()
 
-        {updated_state, updated_run}
+        updated_state
 
-      {:error, reason} ->
-        Logger.warning("Failed to create Linear worklog comment for Kepler run #{run.id}: #{inspect(reason)}")
-        {state, run}
+      _run ->
+        state
     end
+  end
+
+  defp maybe_apply_worklog_sync_result(state, _run_id, {:ok, :updated}), do: state
+
+  defp maybe_apply_worklog_sync_result(state, run_id, {:error, {operation, reason}}) do
+    Logger.warning("Failed to #{operation} Linear worklog comment for Kepler run #{run_id}: #{inspect(reason)}")
+    state
+  end
+
+  defp maybe_apply_worklog_sync_result(state, _run_id, _result), do: state
+
+  defp worklog_sync_debounce_ms do
+    Application.get_env(
+      :symphony_elixir,
+      :kepler_worklog_sync_debounce_ms,
+      @default_worklog_sync_debounce_ms
+    )
   end
 
   defp should_create_worklog_comment?(%Run{} = run, force?) do
@@ -1149,11 +1264,9 @@ defmodule SymphonyElixir.Kepler.ControlPlane do
   end
 
   defp predicted_issue_branch(%Run{} = run) do
-    run.linear_issue_identifier || run.linear_issue_id ||
-      "unknown"
-      |> then(fn issue_token ->
-        if String.starts_with?(issue_token, "kepler/"), do: issue_token, else: "kepler/#{issue_token}"
-      end)
+    issue_token = run.linear_issue_identifier || run.linear_issue_id || "unknown"
+
+    if String.starts_with?(issue_token, "kepler/"), do: issue_token, else: "kepler/#{issue_token}"
   end
 
   defp maybe_transition_issue_state(_run, nil), do: :ok

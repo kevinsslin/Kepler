@@ -36,7 +36,8 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
     workspace_path = workspace_path(run, repository)
     expected_branch = expected_issue_branch(run, repository.default_branch)
 
-    with {:ok, github_env} <- github_env(github_client, repository),
+    with :ok <- validate_runtime_paths(workspace_path, repository),
+         {:ok, github_env} <- github_env(github_client, repository),
          {:ok, created?} <- ensure_repository_workspace(workspace_path, repository, github_env),
          :ok <- ensure_local_operational_paths_ignored(workspace_path),
          :ok <- ensure_reference_workspaces(workspace_path, repository, github_env),
@@ -322,7 +323,8 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
   defp ensure_reference_workspace(workspace_path, repository, env) do
     reference_path = reference_workspace_path(workspace_path, repository.id)
 
-    with :ok <- set_reference_workspace_writable(reference_path),
+    with :ok <- validate_reference_workspace_path(reference_path, workspace_path, repository.id),
+         :ok <- set_reference_workspace_writable(reference_path),
          {:ok, _created?} <- ensure_repository_workspace(reference_path, repository, env),
          :ok <- set_reference_workspace_read_only(reference_path) do
       :ok
@@ -331,6 +333,131 @@ defmodule SymphonyElixir.Kepler.Execution.Runner do
         {:error, {:reference_repository_sync_failed, repository.id, reason}}
     end
   end
+
+  defp validate_runtime_paths(workspace_path, repository) do
+    settings = Config.settings!()
+    workspace_root = Path.expand(settings.workspace.root)
+    state_root = Path.expand(settings.state.root)
+    workspace_path = Path.expand(workspace_path)
+
+    [
+      fn -> validate_runtime_root(workspace_root, :workspace, settings.workspace.root) end,
+      fn -> validate_runtime_root(state_root, :state, settings.state.root) end,
+      fn -> validate_separate_runtime_roots(workspace_root, state_root) end,
+      fn -> validate_repository_id(repository.id) end,
+      fn -> validate_repository_workflow_path(repository.id, repository.workflow_path) end,
+      fn -> validate_child_path(workspace_root, workspace_path, :workspace_path) end
+    ]
+    |> run_path_validations()
+  end
+
+  defp validate_reference_workspace_path(reference_path, workspace_path, repository_id) do
+    reference_root = Path.expand(Path.join([workspace_path, ".kepler", "refs"]))
+    reference_path = Path.expand(reference_path)
+
+    cond do
+      not safe_repository_id?(repository_id) ->
+        {:error, {:unsafe_kepler_reference_repository_id, repository_id}}
+
+      not child_path?(reference_root, reference_path) ->
+        {:error, {:unsafe_kepler_reference_workspace_path, reference_path, reference_root}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp run_path_validations(validations) do
+    Enum.reduce_while(validations, :ok, fn validation, :ok ->
+      case validation.() do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp absolute_path?(path) when is_binary(path), do: Path.type(path) == :absolute
+
+  defp validate_runtime_root(expanded_path, kind, original_path) do
+    if absolute_path?(expanded_path) and not broad_runtime_root?(expanded_path) do
+      :ok
+    else
+      {:error, {unsafe_runtime_root_error(kind), original_path}}
+    end
+  end
+
+  defp unsafe_runtime_root_error(:workspace), do: :unsafe_kepler_workspace_root
+  defp unsafe_runtime_root_error(:state), do: :unsafe_kepler_state_root
+
+  defp broad_runtime_root?(path) do
+    expanded_path = Path.expand(path)
+
+    expanded_path in [
+      Path.expand("/"),
+      Path.expand(System.tmp_dir!()),
+      Path.expand("~")
+    ]
+  end
+
+  defp validate_separate_runtime_roots(workspace_root, state_root) do
+    if same_or_nested_path?(workspace_root, state_root) or same_or_nested_path?(state_root, workspace_root) do
+      {:error, {:unsafe_kepler_runtime_roots, workspace_root, state_root}}
+    else
+      :ok
+    end
+  end
+
+  defp validate_repository_id(repository_id) do
+    if safe_repository_id?(repository_id) do
+      :ok
+    else
+      {:error, {:unsafe_kepler_repository_id, repository_id}}
+    end
+  end
+
+  defp safe_repository_id?(value) when is_binary(value) do
+    Regex.match?(~r/\A[A-Za-z0-9._-]+\z/, value)
+  end
+
+  defp safe_repository_id?(_value), do: false
+
+  defp safe_relative_path?(value) when is_binary(value) do
+    Path.type(value) == :relative and ".." not in Path.split(value)
+  end
+
+  defp safe_relative_path?(_value), do: false
+
+  defp validate_repository_workflow_path(repository_id, workflow_path) do
+    if safe_relative_path?(workflow_path) do
+      :ok
+    else
+      {:error, {:unsafe_kepler_workflow_path, repository_id, workflow_path}}
+    end
+  end
+
+  defp same_or_nested_path?(parent, child) do
+    parent_parts = parent |> Path.expand() |> Path.split()
+    child_parts = child |> Path.expand() |> Path.split()
+
+    Enum.take(child_parts, length(parent_parts)) == parent_parts
+  end
+
+  defp child_path?(parent, child) do
+    parent = Path.expand(parent)
+    child = Path.expand(child)
+
+    parent != child and same_or_nested_path?(parent, child)
+  end
+
+  defp validate_child_path(parent, child, error_key) do
+    if child_path?(parent, child) do
+      :ok
+    else
+      {:error, {unsafe_child_path_error(error_key), child, parent}}
+    end
+  end
+
+  defp unsafe_child_path_error(:workspace_path), do: :unsafe_kepler_workspace_path
 
   defp ensure_local_operational_paths_ignored(workspace_path) do
     exclude_path = Path.join([workspace_path, ".git", "info", "exclude"])

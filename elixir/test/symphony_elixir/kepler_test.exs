@@ -302,6 +302,8 @@ defmodule SymphonyElixir.KeplerTest do
   end
 
   test "created webhook routes explicitly matched repository and completes the run" do
+    release_ref = make_ref()
+
     persistent_put(
       {FakeLinearClient, :issue},
       %SymphonyElixir.Kepler.Linear.IssueContext{
@@ -314,6 +316,8 @@ defmodule SymphonyElixir.KeplerTest do
         project_slug: "kepler"
       }
     )
+
+    persistent_put({FakeRunner, :release}, {:block_once, self(), release_ref})
 
     assert :ok =
              ControlPlane.handle_webhook(%{
@@ -333,13 +337,15 @@ defmodule SymphonyElixir.KeplerTest do
     assert started_comment =~ "## Kepler Workpad"
     assert started_comment =~ "Status: `executing`"
     assert started_comment =~ "Repository: `example/repo-api`"
-    assert started_comment =~ "Branch: `"
-    assert started_comment =~ "KEP-42`"
+    assert started_comment =~ "Branch: `kepler/KEP-42`"
     refute started_comment =~ "## Kepler Workpad\n\n---\n\n## Kepler Workpad"
     assert started_comment =~ "Inspect the selected repository"
     assert_receive {:activity, "session-1", %{type: "thought", body: body}}
     assert body =~ "Acknowledged"
     assert_receive {:runner_run, "repo-api", "session-1", []}
+    assert_receive {:runner_waiting, "session-1", ^release_ref, runner_pid}
+    send(runner_pid, {:release_runner, release_ref})
+
     assert_receive {:issue_state_update, "issue-1", "In Review"}
     finished_comment = assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `completed`"))
     assert finished_comment =~ "## Kepler Workpad"
@@ -731,7 +737,14 @@ defmodule SymphonyElixir.KeplerTest do
     assert_receive {:issue_comment_create, "issue-noop", comment_id, started_comment}
     assert started_comment =~ "## Kepler Workpad"
     assert_receive {:issue_state_update, "issue-noop", "Blocked"}
-    finished_comment = assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `failed`"))
+
+    finished_comment =
+      if String.contains?(started_comment, "Status: `failed`") do
+        started_comment
+      else
+        assert_receive_comment_update(comment_id, &String.contains?(&1, "Status: `failed`"))
+      end
+
     assert finished_comment =~ "## Kepler Workpad"
     assert finished_comment =~ "Status: `failed`"
     assert finished_comment =~ "Kepler requires a PR for every ticket"
@@ -936,16 +949,19 @@ defmodule SymphonyElixir.KeplerTest do
     assert started_comment =~ "Status: `executing`"
     assert started_comment =~ "## Kepler Workpad"
     refute started_comment =~ "## Kepler Workpad\n\n---\n\n## Kepler Workpad"
-    assert started_comment =~ "- [ ] Inspect the selected repository"
-    refute started_comment =~ "- [x] Inspect the selected repository"
 
-    updated_comment =
-      assert_receive_comment_update(
-        comment_id,
-        &String.contains?(&1, "- [x] Inspect the selected repository")
-      )
+    latest_open_comment =
+      if String.contains?(started_comment, "- [ ] Run targeted validation") do
+        started_comment
+      else
+        assert_receive_comment_update(
+          comment_id,
+          &String.contains?(&1, "- [ ] Run targeted validation")
+        )
+      end
 
-    assert updated_comment =~ "- [ ] Run targeted validation"
+    assert latest_open_comment =~ "- [x] Inspect the selected repository"
+    assert latest_open_comment =~ "- [ ] Run targeted validation"
     refute_receive {:issue_comment_create, "issue-workpad-sync", _, _}, 200
     refute_receive {:issue_comment_update, ^comment_id, _body}, 200
 
@@ -1013,7 +1029,7 @@ defmodule SymphonyElixir.KeplerTest do
     started_comment =
       assert_receive_comment_update(
         "comment-existing-worklog",
-        &String.contains?(&1, "Status: `executing`")
+        &(String.contains?(&1, "Status: `executing`") or String.contains?(&1, "Status: `completed`"))
       )
 
     assert started_comment =~ "## Kepler Workpad"
@@ -1021,10 +1037,14 @@ defmodule SymphonyElixir.KeplerTest do
     refute_receive {:issue_comment_create, "issue-worklog-reuse", _, _}, 200
 
     finished_comment =
-      assert_receive_comment_update(
-        "comment-existing-worklog",
-        &String.contains?(&1, "Status: `completed`")
-      )
+      if String.contains?(started_comment, "Status: `completed`") do
+        started_comment
+      else
+        assert_receive_comment_update(
+          "comment-existing-worklog",
+          &String.contains?(&1, "Status: `completed`")
+        )
+      end
 
     assert finished_comment =~ "Pull request: attached to the issue"
   end

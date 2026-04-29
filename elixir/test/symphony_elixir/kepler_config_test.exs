@@ -379,6 +379,57 @@ defmodule SymphonyElixir.KeplerConfigTest do
     assert settings.state.root == Path.expand(Path.join(fake_home, ".kepler/state"))
   end
 
+  test "rejects broad or nested runtime roots" do
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+
+    workspace_root =
+      Path.join(System.tmp_dir!(), "kepler-runtime-root-#{System.unique_integer([:positive])}")
+
+    assert {:error, {:invalid_kepler_config, message}} =
+             Config.load_from_string("""
+             service_name: "Kepler"
+             linear:
+               api_key: "linear-token"
+               webhook_secret: "linear-secret"
+             github:
+               bot_name: "Kepler Bot"
+               bot_email: "kepler@example.com"
+             workspace:
+               root: "#{workspace_root}"
+             state:
+               root: "#{Path.join(workspace_root, "state")}"
+             repositories:
+               - id: "repo-api"
+                 full_name: "example/repo-api"
+                 clone_url: "https://github.com/example/repo-api.git"
+             """)
+
+    assert message =~ "workspace.root and state.root must be separate, non-nested directories"
+  end
+
+  test "rejects repository ids and workflow paths that can escape workspace paths" do
+    System.put_env("GITHUB_TOKEN", "kepler-test-token")
+
+    assert {:error, {:invalid_kepler_config, message}} =
+             Config.load_from_string("""
+             service_name: "Kepler"
+             linear:
+               api_key: "linear-token"
+               webhook_secret: "linear-secret"
+             github:
+               bot_name: "Kepler Bot"
+               bot_email: "kepler@example.com"
+             repositories:
+               - id: "../repo-api"
+                 full_name: "example/repo-api"
+                 clone_url: "https://github.com/example/repo-api.git"
+                 workflow_path: "../WORKFLOW.md"
+             """)
+
+    assert message =~ "id may only contain letters, numbers, dot, underscore, and dash"
+    assert message =~ "workflow_path must not include '..' path segments"
+  end
+
   test "rejects unknown reference repositories" do
     System.put_env("GITHUB_TOKEN", "kepler-test-token")
 

@@ -448,7 +448,7 @@ Kepler launches whatever command resolves from the repository workflow or fallba
 The bundled fallback command is:
 
 ```text
-$CODEX_BIN --config 'model="gpt-5.5"' --config model_reasoning_effort=high app-server
+$CODEX_BIN --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
 ```
 
 So either:
@@ -464,6 +464,8 @@ is intended to be a real org-wide default, not just a placeholder.
 
 It assumes hosted Kepler behavior and requires the agent to:
 
+- run a pre-flight audit before edits, including repo state, Linear status, tool/auth availability,
+  existing PR/review context, and required validation copied from the ticket
 - stay inside the already-routed repository
 - create or reuse one stable issue branch before editing
 - discover and run the highest-signal repo-native validation
@@ -487,14 +489,11 @@ Current boundary:
   bullets, and optional risks.
 - For backend and smart-contract changes, the report must include at least one passing validation
   entry whose `kind` is `test`, `integration`, `e2e`, or `contract`.
-- Kepler can render screenshot evidence in the PR body when the report provides screenshot paths.
-- Kepler can also render explicit `before_url` / `after_url` fields from the report when you
-  already have stable hosted artifact URLs.
-- Kepler does not have a separate media upload service in v1.
-- If you want screenshots to render inside the PR body today, the workflow must provide paths that
-  remain accessible on the issue branch, for example `.kepler/evidence/...` committed on that
-  branch, committed into `HEAD`, and pushed to the remote issue branch before PR publication, or
-  the report must provide stable hosted URLs instead.
+- The bundled fallback tells the agent to upload screenshots with `gh gist create --public=false`
+  and put stable raw `before_url` / `after_url` values in the report. Screenshot binaries must not
+  be committed to the issue branch.
+- Kepler can still render committed screenshot paths from custom repo-local workflows for backwards
+  compatibility, but the shared fallback uses hosted URLs.
 - Do not promise screenshot-backed frontend review if your repos or runtime do not have a workable
   screenshot generation path yet.
 
@@ -523,10 +522,10 @@ For teams where most repos should behave the same way, the simplest pattern is:
 
 This intentionally differs from the local Symphony polling workflow in [`../elixir/WORKFLOW.md`](../elixir/WORKFLOW.md):
 
-- the local workflow encodes a tracker-driven state machine
+- the local workflow encodes the authoritative tracker-driven state machine
 - Kepler hosted mode is driven by Linear agent sessions, not tracker polling
-- so the shared fallback borrows the execution discipline from the longer example, but it does not
-  copy the `Todo/Rework/Human Review/Merging` state machine into hosted runs
+- the shared fallback now includes a hosted status map and PR feedback sweep so each repository gets
+  the same fail-fast discipline without taking over local tracker polling
 
 Verify before deployment:
 

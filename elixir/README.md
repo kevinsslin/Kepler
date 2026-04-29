@@ -306,6 +306,7 @@ Otherwise it falls back to the bundled shared workflow:
 
 The shared fallback is designed to be a usable organization default. It requires:
 
+- a pre-flight audit of repo state, Linear status, required tools/auth, and existing PR feedback
 - a stable issue branch derived from the ticket identifier
 - a local `.kepler/workpad.md` scratchpad
 - a structured `.kepler/pr-report.json` handoff file for changed-file runs

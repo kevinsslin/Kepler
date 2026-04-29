@@ -431,6 +431,7 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
     |> maybe_add_missing_secret("linear.webhook_secret", settings.linear.webhook_secret)
     |> validate_linear_auth(settings.linear)
     |> validate_github_auth(settings.github)
+    |> validate_runtime_paths(settings)
     |> validate_reference_repositories(settings.repositories)
     |> case do
       [] ->
@@ -641,6 +642,102 @@ defmodule SymphonyElixir.Kepler.Config.Schema do
           ]
     end
   end
+
+  defp validate_runtime_paths(errors, settings) do
+    errors
+    |> validate_runtime_root("workspace.root", settings.workspace.root)
+    |> validate_runtime_root("state.root", settings.state.root)
+    |> validate_separate_runtime_roots(settings.workspace.root, settings.state.root)
+    |> validate_repository_path_settings(settings.repositories)
+  end
+
+  defp validate_runtime_root(errors, field, path) when is_binary(path) do
+    expanded_path = Path.expand(path)
+
+    cond do
+      Path.type(expanded_path) != :absolute ->
+        errors ++ ["#{field} must resolve to an absolute path"]
+
+      broad_runtime_root?(expanded_path) ->
+        errors ++ ["#{field} must not point at a broad system directory"]
+
+      true ->
+        errors
+    end
+  end
+
+  defp validate_runtime_root(errors, field, _path),
+    do: errors ++ ["#{field} must resolve to an absolute path"]
+
+  defp broad_runtime_root?(path) do
+    expanded_path = Path.expand(path)
+
+    expanded_path in [
+      Path.expand("/"),
+      Path.expand(System.tmp_dir!()),
+      Path.expand("~")
+    ]
+  end
+
+  defp validate_separate_runtime_roots(errors, workspace_root, state_root)
+       when is_binary(workspace_root) and is_binary(state_root) do
+    workspace_root = Path.expand(workspace_root)
+    state_root = Path.expand(state_root)
+
+    if same_or_nested_path?(workspace_root, state_root) or same_or_nested_path?(state_root, workspace_root) do
+      errors ++ ["workspace.root and state.root must be separate, non-nested directories"]
+    else
+      errors
+    end
+  end
+
+  defp validate_separate_runtime_roots(errors, _workspace_root, _state_root), do: errors
+
+  defp same_or_nested_path?(parent, child) do
+    parent_parts = parent |> Path.expand() |> Path.split()
+    child_parts = child |> Path.expand() |> Path.split()
+
+    Enum.take(child_parts, length(parent_parts)) == parent_parts
+  end
+
+  defp validate_repository_path_settings(errors, repositories) when is_list(repositories) do
+    errors ++ Enum.flat_map(repositories, &repository_path_setting_errors/1)
+  end
+
+  defp repository_path_setting_errors(%Repository{} = repository) do
+    []
+    |> validate_repository_id(repository.id)
+    |> validate_repository_workflow_path(repository.id, repository.workflow_path)
+  end
+
+  defp validate_repository_id(errors, repository_id) when is_binary(repository_id) do
+    if Regex.match?(~r/\A[A-Za-z0-9._-]+\z/, repository_id) do
+      errors
+    else
+      errors ++ ["repositories.#{repository_id}.id may only contain letters, numbers, dot, underscore, and dash"]
+    end
+  end
+
+  defp validate_repository_id(errors, repository_id),
+    do: errors ++ ["repositories.#{inspect(repository_id)}.id must be a string path token"]
+
+  defp validate_repository_workflow_path(errors, repository_id, workflow_path) when is_binary(workflow_path) do
+    workflow_parts = Path.split(workflow_path)
+
+    cond do
+      Path.type(workflow_path) != :relative ->
+        errors ++ ["repositories.#{repository_id}.workflow_path must be a relative path"]
+
+      ".." in workflow_parts ->
+        errors ++ ["repositories.#{repository_id}.workflow_path must not include '..' path segments"]
+
+      true ->
+        errors
+    end
+  end
+
+  defp validate_repository_workflow_path(errors, repository_id, _workflow_path),
+    do: errors ++ ["repositories.#{repository_id}.workflow_path must be a relative path"]
 
   defp validate_private_key(private_key) when is_binary(private_key) do
     case :public_key.pem_decode(private_key) do

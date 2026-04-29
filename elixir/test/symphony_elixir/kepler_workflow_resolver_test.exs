@@ -133,6 +133,10 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     assert workflow.prompt =~ ".kepler/workpad.md"
     assert workflow.prompt =~ ".kepler/pr-report.json"
     assert workflow.prompt =~ ".kepler/refs/"
+    assert workflow.prompt =~ "Step -1: Pre-flight audit"
+    assert workflow.prompt =~ "Linear issue state checked"
+    assert workflow.prompt =~ "Apply the hosted status map"
+    assert workflow.prompt =~ "PR feedback sweep protocol"
     assert workflow.prompt =~ "kepler/{{ issue.identifier }}"
     assert workflow.prompt =~ "origin/<issue-branch>"
     assert workflow.prompt =~ "\"change_type\": \"frontend\""
@@ -141,6 +145,7 @@ defmodule SymphonyElixir.Kepler.WorkflowResolverTest do
     assert workflow.prompt =~ "passing automated tests are mandatory"
     assert workflow.prompt =~ "commit the work and push the issue branch before finishing"
     assert workflow.prompt =~ "Do not create duplicate PRs"
+    assert workflow.prompt =~ "Pre-flight audit is complete"
   end
 
   test "resolver injects hosted operator rules into the loaded workflow", %{root: root} do
